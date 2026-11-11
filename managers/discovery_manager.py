@@ -117,9 +117,29 @@ class DiscoveryManager(QObject):
 
     # ── setup ────────────────────────────────────────────────────────
 
+    def _start_igdb(self):
+        """Start the IGDB worker only when credentials are configured."""
+        if not secrets.has_igdb_credentials():
+            print("[Discovery] IGDB credentials not configured; rows hidden")
+            return
+
+        from network.igdb_worker import IGDBWorker
+
+        igdb_keys = [c["key"] for c in IGDB_CATEGORIES if c["key"] in IGDB_ROW_KEYS]
+        keys_to_fetch = [k for k in igdb_keys if self._needs_fetch(k)]
+        worker = IGDBWorker(category_keys=igdb_keys,
+                            initial_keys=keys_to_fetch,
+                            parent=self)
+        worker.categories_ready.connect(self._on_categories)
+        worker.page_ready.connect(self._on_page)
+        worker.error_occurred.connect(self.error_occurred)
+        self._worker = worker
+        worker.start()
+        if not keys_to_fetch:
+            print(f"[Discovery] IGDB rows from cache ({len(igdb_keys)} keys)")
+
     def start(self):
         from network.cover_worker import CoverWorker
-        from network.igdb_worker import IGDBWorker
 
         self._cover_worker = CoverWorker(
             installed_games=getattr(self.mw, 'installed_games', {}) or {},
@@ -136,22 +156,7 @@ class DiscoveryManager(QObject):
         if self._taxonomy:
             self.taxonomy_ready.emit(self._taxonomy)
 
-        # IGDB: solo le righe editoriali (Trending / New Releases).
-        if secrets.has_igdb_credentials():
-            igdb_keys = [c["key"] for c in IGDB_CATEGORIES if c["key"] in IGDB_ROW_KEYS]
-            keys_to_fetch = [k for k in igdb_keys if self._needs_fetch(k)]
-            worker = IGDBWorker(category_keys=igdb_keys,
-                                initial_keys=keys_to_fetch,
-                                parent=self)
-            worker.categories_ready.connect(self._on_categories)
-            worker.page_ready.connect(self._on_page)
-            worker.error_occurred.connect(self.error_occurred)
-            self._worker = worker
-            worker.start()
-        else:
-            print("[Discovery] IGDB credentials not configured; rows hidden")
-        if not keys_to_fetch:
-            print(f"[Discovery] IGDB rows from cache ({len(igdb_keys)} keys)")
+        self._start_igdb()
 
         # SteamRip: righe native (Recently Updated + categorie) paginate via REST.
         native_jobs = self._native_jobs_to_fetch()

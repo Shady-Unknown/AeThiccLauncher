@@ -1,6 +1,8 @@
 import time
 import unittest
+from unittest import mock
 
+from core import secrets
 from managers.discovery_manager import CACHE_SCHEMA, DiscoveryManager
 
 
@@ -40,6 +42,19 @@ class DiscoveryCacheTests(unittest.TestCase):
             }
         }
         self.assertFalse(manager._needs_fetch("new_releases"))
+
+    def test_start_igdb_without_credentials_is_noop(self):
+        manager = DiscoveryManager(None)
+        with mock.patch.object(secrets, "has_igdb_credentials", return_value=False):
+            manager._start_igdb()
+        self.assertIsNone(manager._worker)
+
+    def test_categories_hide_igdb_without_credentials(self):
+        manager = DiscoveryManager(None)
+        with mock.patch.object(secrets, "has_igdb_credentials", return_value=False):
+            keys = [cat["key"] for cat in manager.categories()]
+        self.assertNotIn("trending", keys)
+        self.assertNotIn("new_releases", keys)
 
 
 if __name__ == "__main__":
