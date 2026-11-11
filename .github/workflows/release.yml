@@ -135,14 +135,33 @@ jobs:
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
 
+      - name: Extract changelog section
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version = os.environ["VERSION"].lstrip("v")
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^##\s+v?{re.escape(version)}\b.*?(?=^##\s|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(text)
+          if match:
+              body = match.group(0).strip()
+              body = re.sub(r"^##\s+.*\n", "", body, count=1).strip()
+          else:
+              body = f"Release {version}"
+          Path("release_notes.md").write_text(body + "\n", encoding="utf-8")
+          print(body[:300])
+          PY
+
       - name: Push Release to Public Repo
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
           name: "Ae Thicc Launcher v${{ env.VERSION }}"
-          body: |
-            ## New Release: v${{ env.VERSION }}
-            Automated build from commit: ${{ github.event.head_commit.message }}
+          body_path: release_notes.md
           files: |
             Ae_Thicc_Launcher_Windows.zip
             Ae_Thicc_Launcher_Setup.exe
