@@ -9,10 +9,10 @@ import requests
 
 from core.paths import PathManager
 
-GOLD_TIER_URL = os.environ.get(
-    "AETHICC_GOLD_TIER_URL",
-    "https://raw.githubusercontent.com/OWNER/REPO/main/lists/gold_tier_games.json",
-)
+# Temporary: the gold tier list still lives in the current closed-source public
+# repo. When the open-source repo ships lists/gold_tier_games.json and the
+# closed-source repo is retired, update this URL.
+GOLD_TIER_URL = "https://raw.githubusercontent.com/Shady-Unknown/ae-thicc-launcher/main/lists/gold_tier_games.json"
 LOCAL_FILENAME = "gold_tier_games.json"
 META_FILENAME = "gold_tier_meta.json"
 _UA = "AeThiccLauncher/1.0 (gold-tier-resolver)"
