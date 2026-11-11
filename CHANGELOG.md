@@ -2,27 +2,28 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
-## Unreleased
+## v1.9.0 — 2026-11-11
 
-### API credentials (BYOK) and open-source readiness
-- SteamGridDB and IGDB are now **BYOK** (Bring Your Own Key): fields in the first-run wizard and in **Settings → API Keys**, with Test/Remove actions and optional Skip.
-- Credentials are stored in the OS keychain (Windows Credential Manager, Secret Service on Linux) with an encrypted fallback file; never in `config.json` or logs. Environment variables `AETHICC_SGDB_KEY` / `AETHICC_IGDB_*` override them for development.
-- The app works without keys: IGDB rows are hidden with a one-time banner and SGDB cover lookups are skipped. Credentials are stored in the OS keychain or the encrypted fallback file.
-- `keyring` added to requirements; Flatpak manifest gets the Secret Service permission.
+### Open source & API credentials (BYOK)
+- The launcher is now **open source**.
+- No API keys are bundled. SteamGridDB and IGDB are **BYOK** (Bring Your Own Key), configurable in the first-run wizard and in **Settings → API Keys**, with Test/Remove actions and optional Skip.
+- Credentials are stored in the OS keychain (Windows Credential Manager, Secret Service on Linux) with an encrypted fallback file. They are never written to `config.json` or logs. `AETHICC_SGDB_KEY` / `AETHICC_IGDB_*` environment variables override them for development.
+- The app works without keys: IGDB rows are hidden with a one-time banner and SteamGridDB cover lookups are skipped.
+- `keyring` added to the requirements; the Flatpak manifest gets the Secret Service permission.
+
+### First-run wizard & configurable data root
+- New first-run setup wizard: choose the data/cache folder, one or more game libraries and a default library, plus temp and savegame folders. It can be re-run from **Settings → Run setup wizard**.
+- The whole runtime footprint (config, catalog, covers, stats, logs, temp) follows a configurable **data root**. Defaults remain the historical per-user AppData/XDG folders; a bootstrap `aethicc.paths.json` records a non-default root. When the install folder is read-only (Flatpak `/app`, `Program Files`) the bootstrap is written to the user data directory.
+- Optional, non-destructive import of existing data from the legacy platform folder.
+- "Watched Folders" is now presented as **Game Libraries**; the install destination dialog preselects the default library, shows free space and can create a new library on another drive.
+- Windows build switched to **PyInstaller `--onedir`** with an onedir zip and an **Inno Setup** installer (`Ae_Thicc_Launcher_Setup.exe`). The installer puts the app in the standard Programs folder (`C:\Program Files\AeThiccLauncher`, UAC) and writes only the application folder; data and games stay in AppData/`C:\SteamRip` (or wherever the wizard points them), so uninstalling removes the app only.
+- Onboarding defaults: data/cache in `%LOCALAPPDATA%\AeThiccLauncher`, game library in `C:\SteamRip` (Windows) / `~/SteamRip` (Linux).
+- The executable is now **`Ae_Thicc_Launcher.exe`**; the Windows AppUserModelID and the SteamGridDB user agent no longer carry the old project name.
 
 ### Data seed and hidden support folders
 - `data/`, `bin/`, `.media/`, `_internal/` and `lists/` are hidden in the installer and treated as seeds only. At startup their contents are copied into the data root chosen by the wizard; runtime reads use only the data root (`data/` for definitions/icons/achievement packs, `local_dbs/` for the posts index and gold-tier list).
 - Seed updates use a hash state: unmodified shipped files are refreshed, user-edited files are preserved; achievement packs are add-only.
-- The launcher no longer reads runtime data from `{app}\data` or `{app}\lists`.
-
-### First-run wizard & configurable data root
-- New first-run setup wizard: choose the data/cache folder, one or more game libraries and a default library, plus temp and savegame folders. It can be re-run from **Settings → Run setup wizard**.
-- The whole runtime footprint (config, catalog, covers, stats, logs, temp) follows a configurable **data root**. Defaults remain the historical per-user AppData/XDG folders; a bootstrap `aethicc.paths.json` is written only when the user moves it (or in portable setups where the exe folder is writable). When the executable folder is read-only (Flatpak `/app`) the bootstrap goes to the user data directory.
-- Optional, non-destructive import of existing data from the legacy platform folder.
-- "Watched Folders" is now presented as **Game Libraries**; the install destination dialog preselects the default library, shows free space and can create a new library on another drive.
-- Windows build switched to **PyInstaller `--onedir`** with a portable zip and an **Inno Setup** installer (`Ae_Thicc_Launcher_Setup.exe`). The installer puts the app in the standard Programs folder (`C:\Program Files\AeThiccLauncher`, UAC) and writes only the application folder; data and games stay in AppData/`C:\SteamRip` (or wherever the wizard points them), so uninstalling removes the app only.
-- Onboarding defaults: data/cache in `%LOCALAPPDATA%\AeThiccLauncher`, game library in `C:\SteamRip` (Windows) / `~/SteamRip` (Linux).
-- The executable is now **`Ae_Thicc_Launcher.exe`**; the Windows AppUserModelID and the SGDB user agent no longer carry the old project name.
+- The launcher no longer reads runtime data from the application folder.
 
 ### Performance
 - The Gold Tier list no longer performs a synchronous network HEAD on the GUI thread at startup (could block ~10s when GitHub was unreachable). It loads the local/seed list immediately and refreshes in a background thread.

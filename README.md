@@ -161,6 +161,26 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ---
 
+## What's New in Version 1.9.0?
+
+### Open source & API keys
+- The launcher is now **open source** and ships **no API keys**.
+- SteamGridDB and IGDB are **BYOK**: configure them in the first-run wizard or **Settings → API Keys**, with Test/Remove and Skip.
+- Credentials live in the OS keychain (or an encrypted fallback file), never in `config.json` or logs.
+- The app works without keys: IGDB rows are hidden with a one-time banner and SteamGridDB cover lookups are skipped.
+
+### Setup & data
+- New first-run wizard: configurable data/cache root, one or more **Game Libraries**, default library, temp and savegames folders.
+- Defaults: data/cache in `%LOCALAPPDATA%\AeThiccLauncher`, game library in `C:\SteamRip` (Windows) / `~/SteamRip` (Linux).
+- Windows build uses PyInstaller **onedir** + **Inno Setup** installer; support folders are hidden and data is seeded into the chosen data root at first start.
+- "Watched Folders" is now presented as **Game Libraries**; the install dialog preselects the default library, shows free space and can create a new library on another drive.
+
+### Performance & reliability
+- Startup no longer blocks on the Gold Tier network check; heavy work runs after the window is visible.
+- Theme changes are coalesced (no more repeated full re-themes).
+- Background network failures show a dismissible banner instead of a misleading task error.
+- README documents the Malwarebytes website block on `steamrip.com` (website reputation, not a file detection).
+
 ## What's New in Version 1.8.0?
 
 ### Stats
