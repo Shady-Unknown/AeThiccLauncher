@@ -1,0 +1,23 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 20010904//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
+<!-- Created using Krita: https://krita.org -->
+<svg xmlns="http://www.w3.org/2000/svg" 
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    xmlns:krita="http://krita.org/namespaces/svg/krita"
+    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+    width="368.64pt"
+    height="368.64pt"
+    viewBox="0 0 368.64 368.64">
+<defs>
+  <linearGradient id="gradient0" gradientUnits="objectBoundingBox" x1="0" y1="0" x2="1" y2="1" spreadMethod="pad">
+   <stop stop-color="#dc6ea5" offset="0" stop-opacity="1"/>
+   <stop stop-color="#7e96d0" offset="0.825532019138336" stop-opacity="1"/>
+   <stop stop-color="#6ec8fa" offset="1" stop-opacity="1"/>
+  </linearGradient>
+  <linearGradient id="gradient1" gradientUnits="objectBoundingBox" x1="0" y1="0" x2="1" y2="1" spreadMethod="pad">
+   <stop stop-color="#ffffff" offset="0" stop-opacity="1"/>
+   <stop stop-color="#6b6a7b" offset="1" stop-opacity="1"/>
+  </linearGradient>
+ </defs>
+<path id="shape0" transform="matrix(0.72 0 0 0.72 0 0)" fill="url(#gradient0)" stroke="url(#gradient1)" stroke-width="0" stroke-linecap="square" stroke-linejoin="bevel" d="M256 0C326.68 0 390.7 28.66 437.02 74.98C483.34 121.3 512 185.32 512 256C512 326.68 483.34 390.69 437.02 437.01C390.7 483.33 326.68 511.99 256 511.99C185.32 511.99 121.3 483.33 74.98 437.01C28.66 390.69 0 326.68 0 256C0 185.32 28.66 121.3 74.98 74.98C121.3 28.66 185.32 0 256 0ZM182.81 174.9L329.18 174.9C333.99 174.9 337.92 178.92 337.92 183.65L337.92 328.33C337.92 333.06 333.92 337.07 329.18 337.07L182.81 337.07C178.08 337.07 174.08 333.15 174.08 328.33L174.08 183.65C174.08 178.84 178.01 174.9 182.81 174.9ZM412.75 99.25C372.64 59.15 317.21 34.33 256 34.33C194.79 34.33 139.36 59.15 99.25 99.25C59.15 139.36 34.33 194.79 34.33 256C34.33 317.21 59.15 372.63 99.25 412.74C139.36 452.84 194.79 477.66 256 477.66C317.21 477.66 372.64 452.84 412.75 412.74C452.85 372.63 477.67 317.21 477.67 256C477.67 194.79 452.85 139.36 412.75 99.25Z" sodipodi:nodetypes="ccccccccccccccccccccccccccc"/>
+</svg>

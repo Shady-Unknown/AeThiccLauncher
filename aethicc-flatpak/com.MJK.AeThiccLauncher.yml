@@ -1,0 +1,60 @@
+id: com.MJK.AeThiccLauncher
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: AeThiccLauncher
+
+finish-args:
+  # 1. Permessi grafici e accelerazione hardware per PyQt
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+
+  # 2. Accesso audio (se il launcher o i giochi ne hanno bisogno nell'ambiente)
+  - --socket=pulseaudio
+
+  # 3. La chiave di volta: accesso totale alla Home dell'utente e ai secondi Hard Drive/SSD
+  - --filesystem=host
+  - --filesystem=/run/media       # Per i dischi esterni su Nobara/Fedora/Arch
+  - --filesystem=/mnt             # Per i dischi fissi secondari montati manualmente
+  - --filesystem=/media           # Per retrocompatibilità con altre distro
+  
+  # 4. IL PASSAPORTO: Permesso per eseguire comandi sull'host tramite flatpak-spawn
+  - --talk-name=org.freedesktop.Flatpak
+
+  # 5. Keyring (Secret Service) per le API key dell'utente
+  - --talk-name=org.freedesktop.secrets
+
+modules:
+  - name: aethicclauncher
+    buildsystem: simple
+    build-commands:
+      # Installa l'eseguibile e le cartelle (che hai già)
+      - install -D AeThiccLauncher /app/bin/AeThiccLauncher
+      - cp -r .media /app/bin/.media
+      - cp -r bin /app/bin/bin
+      - if [ -d data ]; then cp -r data /app/bin/data; fi
+      - if [ -d lists ]; then cp -r lists /app/bin/lists; fi
+      - chmod 755 /app/bin/bin/Linux/7zz
+      - install -Dm644 com.MJK.AeThiccLauncher.desktop /app/share/applications/com.MJK.AeThiccLauncher.desktop
+      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/com.MJK.AeThiccLauncher.png
+    sources:
+      - type: file
+        path: ./AeThiccLauncher
+      - type: dir
+        path: ./.media
+        dest: .media
+      - type: dir
+        path: ./bin
+        dest: bin
+      - type: dir
+        path: ./data
+        dest: data
+      - type: dir
+        path: ./lists
+        dest: lists
+      - type: file
+        path: ./com.MJK.AeThiccLauncher.desktop
+      - type: file
+        path: ./icon.png

@@ -1,0 +1,12 @@
+beautifulsoup4==4.14.3
+lxml==5.3.0
+PyQt6==6.11.0
+PyQt6-WebEngine==6.11.0
+Requests==2.34.2
+curl_cffi==0.7.3
+vdf==3.4
+psutil==6.1.1
+Pillow==11.0.0
+PyYAML==6.0.2
+keyring==25.7.0
+secretstorage==3.3.3; sys_platform == "linux"

@@ -1,0 +1,338 @@
+{
+  "gold_tier": [
+    {
+      "game_id": "enshrouded",
+      "title": "Enshrouded",
+      "developer": "Keen Games",
+      "steam_id": "1203620",
+      "ethical_reason": "No microtransactions or predatory monetization. The Early Access model is handled with extreme transparency, featuring regular patches and active community feedback integration. It features solid Proton compatibility without aggressive DRM. Keen Games operates as an independent studio with a sustainable pace and no reported crunch or mass layoffs."
+    },
+    {
+      "game_id": "elden_ring",
+      "title": "Elden Ring",
+      "developer": "FromSoftware",
+      "steam_id": "1245620",
+      "ethical_reason": "A complete, buy-to-play experience with zero microtransactions, battle passes, or fake currencies. Expansions are substantial, transparent, and fairly priced. It highly respects player autonomy with full offline playability, no intrusive third-party DRM, and stellar out-of-the-box Proton compatibility."
+    },
+    {
+      "game_id": "valheim",
+      "title": "Valheim",
+      "developer": "Iron Gate Studio",
+      "steam_id": "892970",
+      "ethical_reason": "Buy-to-play with absolutely zero microtransactions. Iron Gate Studio openly adheres to an anti-crunch philosophy, choosing to release polished updates at a healthy pace rather than burning out their small team. Features native Linux support and no intrusive DRM, highly respecting user ownership."
+    },
+    {
+      "game_id": "satisfactory",
+      "title": "Satisfactory",
+      "developer": "Coffee Stain Studios",
+      "steam_id": "526870",
+      "ethical_reason": "Features a strict 'buy once, get everything' model with zero microtransactions. Coffee Stain Studios is renowned for its stellar, transparent community communication and healthy studio culture, strictly avoiding crunch during development. It respects user hardware, avoiding aggressive DRM and running flawlessly on Linux via Proton."
+    },
+    {
+      "game_id": "deep_rock_galactic",
+      "title": "Deep Rock Galactic",
+      "developer": "Ghost Ship Games",
+      "steam_id": "548430",
+      "ethical_reason": "The absolute gold standard for ethical development. Features a completely free season pass system with zero FOMO, as players can freely toggle and play past seasons. Paid DLCs are strictly cosmetic, transparent, and optional. Ghost Ship Games champions a healthy, anti-crunch work environment and exceptional community support."
+    },
+    {
+      "game_id": "no_mans_sky",
+      "title": "No Man's Sky",
+      "developer": "Hello Games",
+      "steam_id": "275850",
+      "ethical_reason": "The absolute pinnacle of post-launch redemption and consumer respect. Hello Games has provided over a decade of massive, completely free updates with strictly zero microtransactions or paid DLC. The independent studio maintains a healthy culture, and the game runs flawlessly on Linux via Proton without aggressive DRM."
+    },
+    {
+      "game_id": "cyberpunk_2077",
+      "title": "Cyberpunk 2077",
+      "developer": "CD Projekt RED",
+      "steam_id": "1091500",
+      "ethical_reason": "Despite a crunch-heavy launch, CDPR restructured their internal pipelines to prioritize developer health and work-life balance for the massive 2.0 update and Phantom Liberty expansion. It features zero microtransactions, champions software preservation by offering fully DRM-free versions, and boasts excellent Proton compatibility out of the box."
+    },
+    {
+      "game_id": "clair_obscur_expedition_33",
+      "title": "Clair Obscur: Expedition 33",
+      "developer": "Sandfall Interactive",
+      "steam_id": "1908620",
+      "ethical_reason": "Developed by an independent studio focusing entirely on a complete, single-player, buy-to-play artistic experience. It actively avoids live-service pitfalls, FOMO mechanics, and predatory microtransactions, delivering a complete package upon purchase."
+    },
+    {
+      "game_id": "hollow_knight",
+      "title": "Hollow Knight",
+      "developer": "Team Cherry",
+      "steam_id": "367520",
+      "ethical_reason": "A masterpiece of ethical indie development. Team Cherry released four substantial content expansions completely for free. The game is exceptionally reasonably priced, fully DRM-free, features native Linux support, and was built by a tiny team working at a sustainable, independent pace."
+    },
+    {
+      "game_id": "hollow_knight_silksong",
+      "title": "Hollow Knight: Silksong",
+      "developer": "Team Cherry",
+      "steam_id": "1030300",
+      "ethical_reason": "The epitome of an anti-crunch philosophy. Team Cherry has famously delayed the game for years specifically to ensure pristine quality while safeguarding their own physical and mental well-being, refusing to bow to external publisher pressure. It guarantees a complete, DRM-free experience with no microtransactions."
+    },
+    {
+      "game_id": "arc_raiders",
+      "title": "ARC Raiders",
+      "developer": "Embark Studios",
+      "steam_id": "1808500",
+      "ethical_reason": "Admitted with caution. Monetization is strictly limited to non-aggressive, cosmetic microtransactions. Founded by industry veterans, Embark Studios provides substantial updates and actively listens to community feedback. It respects the player base through behavior-based matchmaking and a transparent, innovative use of AI (reinforcement learning for enemy movement) that enhances gameplay without exploiting the user."
+    },
+    {
+      "game_id": "crimson_desert",
+      "title": "Crimson Desert",
+      "developer": "Pearl Abyss",
+      "steam_id": "2122460",
+      "ethical_reason": "Admitted with caution. Despite the developer's history with heavily monetized MMOs, this title was deliberately pivoted to a strictly buy-to-play, single-player experience. It focuses on a complete, narrative-driven package, actively steering clear of the aggressive live-service mechanics and predatory monetization typically found in the studio's past projects."
+    },
+    {
+      "game_id": "subnautica_2",
+      "title": "Subnautica 2",
+      "developer": "Unknown Worlds Entertainment",
+      "steam_id": "2647140",
+      "ethical_reason": "Unknown Worlds publicly and vocally pushed back against their own publisher's 'live-service' framing, reassuring the community. They guarantee a complete, buy-to-play cooperative/single-player experience with absolutely no battle passes or aggressive monetization. The studio maintains a transparent Early Access model and excellent out-of-the-box Proton compatibility."
+    },
+    {
+      "game_id": "the_long_dark",
+      "title": "The Long Dark",
+      "developer": "Hinterland Studio",
+      "steam_id": "305620",
+      "ethical_reason": "Hinterland Studio is an outspoken champion of anti-crunch culture and sustainable development. They provided massive, completely free updates for years before ever introducing paid DLC, which was handled with utmost transparency. The game respects user ownership, avoids all predatory mechanics, and features flawless native Linux compatibility."
+    },
+    {
+      "game_id": "baldurs_gate_3",
+      "title": "Baldur's Gate 3",
+      "developer": "Larian Studios",
+      "steam_id": "1086940",
+      "ethical_reason": "A monumental example of ethical AAA development. Released as a massive, feature-complete, buy-to-play experience with zero microtransactions. Larian Studios mitigates crunch through a global 'follow-the-sun' network of studios, delivers enormous free updates, strictly avoids intrusive DRM to ensure preservation, and runs flawlessly via Proton."
+    },
+    {
+      "game_id": "divinity_original_sin",
+      "title": "Divinity: Original Sin",
+      "developer": "Larian Studios",
+      "steam_id": "373420",
+      "ethical_reason": "A strictly buy-to-play classic with no microtransactions. Larian showed immense respect for early adopters by upgrading everyone to the Enhanced Edition completely for free. It is available fully DRM-free to ensure long-term game preservation and respects both the player's time and initial purchase."
+    },
+    {
+      "game_id": "divinity_original_sin_2",
+      "title": "Divinity: Original Sin 2",
+      "developer": "Larian Studios",
+      "steam_id": "435150",
+      "ethical_reason": "Follows the exact same ethical gold standard as its predecessor. Owners of the base game received the massive Definitive Edition overhaul for free. It features zero microtransactions, respects user hardware by avoiding aggressive third-party DRM, and boasts excellent Proton compatibility for seamless Linux gaming."
+    },
+    {
+      "game_id": "stalker_shadow_of_chernobyl",
+      "title": "S.T.A.L.K.E.R.: Shadow of Chernobyl",
+      "developer": "GSC Game World",
+      "steam_id": "4500",
+      "ethical_reason": "A masterclass in game preservation and community empowerment. Completely devoid of microtransactions, it offers DRM-free availability and actively embraces its legendary modding community, extending the game's life for decades. It runs flawlessly on Linux via Proton."
+    },
+    {
+      "game_id": "stalker_2_heart_of_chornobyl",
+      "title": "S.T.A.L.K.E.R. 2: Heart of Chornobyl",
+      "developer": "GSC Game World",
+      "steam_id": "1643320",
+      "ethical_reason": "An extraordinary example of studio resilience. Developed under the most extreme conditions, the studio maintained transparent communication and dedication to the player base. They guaranteed a completely DRM-free release (via GOG) from day one and zero predatory microtransactions, focusing purely on a massive single-player experience."
+    },
+    {
+      "game_id": "death_stranding_directors_cut",
+      "title": "Death Stranding Director's Cut",
+      "developer": "Kojima Productions",
+      "steam_id": "1850570",
+      "ethical_reason": "A complete, visionary single-player experience with zero microtransactions. Operating as an independent studio, Kojima Productions respects its workforce and the players. The PC version eventually removed Denuvo DRM to aid long-term preservation, and the Director's Cut upgrade was offered transparently and fairly."
+    },
+    {
+      "game_id": "death_stranding_2_on_the_beach",
+      "title": "Death Stranding 2: On The Beach",
+      "developer": "Kojima Productions",
+      "steam_id": "TBD",
+      "ethical_reason": "Admitted proactively. As an independent venture, Kojima Productions has proven their commitment to high-quality, buy-to-play narrative experiences without aggressive monetization. It is fully expected to maintain the studio's focus on artistic integrity, solid PC compatibility, and a healthy development environment."
+    },
+    {
+      "game_id": "the_witcher_3_wild_hunt",
+      "title": "The Witcher 3: Wild Hunt",
+      "developer": "CD Projekt RED",
+      "steam_id": "292030",
+      "ethical_reason": "A landmark in ethical AAA development. CDPR provided two massive, content-rich expansions and numerous free updates without any microtransactions. The game is available DRM-free on GOG, ensuring preservation, and runs flawlessly on Linux via Proton."
+    },
+    {
+      "game_id": "windrose",
+      "title": "Windrose",
+      "developer": "Kraken Express",
+      "steam_id": "3041230",
+      "ethical_reason": "A shining example of prioritizing player experience over predatory monetization. Originally planned as a free-to-play MMO, the developers pivoted to a premium, buy-to-play co-op survival experience. It heavily respects game preservation and user ownership by fully supporting offline solo play and self-hosted private servers."
+    },
+    {
+      "game_id": "terraria",
+      "title": "Terraria",
+      "developer": "Re-Logic",
+      "steam_id": "105600",
+      "ethical_reason": "A legendary example of post-launch dedication. Re-Logic has delivered over a decade of massive, completely free content updates without a single microtransaction. The studio actively supports the modding community, offers DRM-free versions, and features excellent native Linux support."
+    },
+    {
+      "game_id": "stardew_valley",
+      "title": "Stardew Valley",
+      "developer": "ConcernedApe",
+      "steam_id": "413150",
+      "ethical_reason": "The ultimate labor of love. Developed primarily by a solo creator who has provided almost a decade of massive content expansions entirely for free. The game strictly avoids all monetization beyond the initial purchase, is completely DRM-free, and runs natively and flawlessly on Linux."
+    },
+    {
+      "game_id": "hades",
+      "title": "Hades",
+      "developer": "Supergiant Games",
+      "steam_id": "1145360",
+      "ethical_reason": "Supergiant Games is the industry benchmark for studio health, strictly enforcing an anti-crunch culture with mandatory time off and healthy work-life balance. The game is a pristine, buy-to-play masterpiece with absolutely zero microtransactions, offering stellar performance out of the box via Proton."
+    },
+    {
+      "game_id": "factorio",
+      "title": "Factorio",
+      "developer": "Wube Software",
+      "steam_id": "427520",
+      "ethical_reason": "Extremely transparent development with a strict 'no microtransactions, no sales' policy to respect early adopters and maintain fair, honest pricing. It heavily supports user-generated content, respects software preservation with DRM-free options, and features incredibly optimized native Linux support."
+    },
+    {
+      "game_id": "metal_hellsinger",
+      "title": "Metal: Hellsinger",
+      "developer": "The Outsiders",
+      "steam_id": "1061910",
+      "ethical_reason": "A complete, buy-to-play rhythm FPS that deeply respects the player. Expansions are fully transparent, consisting strictly of optional new music tracks and weapons. The studio maintains a healthy development culture, and the game runs flawlessly on Proton, letting players blast through demonic hordes to an incredible metal soundtrack without a single predatory microtransaction in sight."
+    },
+    {
+      "game_id": "project_zomboid",
+      "title": "Project Zomboid",
+      "developer": "The Indie Stone",
+      "steam_id": "108600",
+      "ethical_reason": "The Indie Stone has supported this deep survival simulation for well over a decade with massive free updates. They explicitly prioritize developer mental health and sustainable pacing over rushed deadlines. It embraces user ownership with incredible modding support, native Linux compatibility, and absolutely no live-service monetization."
+    },
+    {
+      "game_id": "slay_the_spire",
+      "title": "Slay the Spire",
+      "developer": "Mega Crit",
+      "steam_id": "646570",
+      "ethical_reason": "Mega Crit fiercely champions consumer respect and studio integrity. The game is a flawless buy-to-play experience with zero microtransactions. The studio famously stood their ground against predatory corporate engine pricing policies, prioritizing ethical business practices, and ensures their game remains highly compatible and fully DRM-free."
+    },
+    {
+      "game_id": "outer_wilds",
+      "title": "Outer Wilds",
+      "developer": "Mobius Digital",
+      "steam_id": "753640",
+      "ethical_reason": "A profound, self-contained buy-to-play masterpiece of exploration and physics simulation. It features zero microtransactions and only one substantial, fairly priced expansion. Mobius Digital fostered a healthy, anti-crunch environment to build its intricate solar system. The game respects preservation and runs beautifully out of the box via Proton."
+    },
+    {
+      "game_id": "dayz",
+      "title": "DayZ",
+      "developer": "Bohemia Interactive",
+      "steam_id": "221100",
+      "ethical_reason": "Despite a rocky Early Access period, Bohemia Interactive delivered years of free updates with absolutely zero microtransactions. It champions game preservation and player autonomy through massive modding support and fully dedicated, self-hosted private servers. Recently, they merged paid DLC into the base game for free. Furthermore, official Proton support for its anti-cheat ensures seamless compatibility on Linux."
+    },
+    {
+      "game_id": "beamng_drive",
+      "title": "BeamNG.drive",
+      "developer": "BeamNG",
+      "steam_id": "284160",
+      "ethical_reason": "An unmatched technical achievement in soft-body physics simulation. The studio has delivered over a decade of massive, entirely free updates with absolutely zero microtransactions. It highly respects user autonomy through extensive modding support and recently added native Linux compatibility."
+    },
+    {
+      "game_id": "rimworld",
+      "title": "RimWorld",
+      "developer": "Ludeon Studios",
+      "steam_id": "294100",
+      "ethical_reason": "A deep, complex simulation operating under a strict anti-FOMO and transparent pricing philosophy. It is completely DRM-free, fully respects user ownership, offers phenomenal modding capabilities to extend its lifespan indefinitely, and runs natively on Linux."
+    },
+    {
+      "game_id": "vampire_survivors",
+      "title": "Vampire Survivors",
+      "developer": "poncle",
+      "steam_id": "1562430",
+      "ethical_reason": "The ultimate anti-greed development model. Offered at an incredibly accessible base price with massive, constant free content updates. Paid expansions are extremely cheap and explicitly transparent. Zero predatory mechanics, just pure, offline-capable gameplay."
+    },
+    {
+      "game_id": "ultrakill",
+      "title": "ULTRAKILL",
+      "developer": "New Blood Interactive",
+      "steam_id": "1229490",
+      "ethical_reason": "Published by New Blood, a proudly anti-corporate and pro-developer studio. It delivers an adrenaline-fueled retro shooter experience developed transparently alongside the community. Features absolutely zero microtransactions, no intrusive DRM, and flawless Proton performance."
+    },
+    {
+      "game_id": "half_life",
+      "title": "Half-Life",
+      "developer": "Valve",
+      "steam_id": "70",
+      "ethical_reason": "A monumental piece of gaming history with absolute respect for preservation. Features robust native Linux support, completely zero microtransactions, and actively embraces a massive modding community that has kept the game alive and evolving for decades."
+    },
+    {
+      "game_id": "half_life_2",
+      "title": "Half-Life 2",
+      "developer": "Valve",
+      "steam_id": "220",
+      "ethical_reason": "Continues Valve's legacy of consumer respect for single-player titles. It is a strictly buy-to-play masterpiece with no predatory mechanics, incredible community modding support, DRM-free options, and flawless native Linux compatibility."
+    },
+    {
+      "game_id": "portal",
+      "title": "Portal",
+      "developer": "Valve",
+      "steam_id": "400",
+      "ethical_reason": "A perfectly self-contained, buy-to-play puzzle masterpiece. It completely avoids microtransactions, respects the player's time, and runs natively on Linux, ensuring long-term software preservation without intrusive third-party software."
+    },
+    {
+      "game_id": "portal_2",
+      "title": "Portal 2",
+      "developer": "Valve",
+      "steam_id": "620",
+      "ethical_reason": "An ethical standard for co-op and single-player design. While it features an extremely minor cosmetic shop, it relies completely on standard gameplay and community-made test chambers for longevity. It is fully playable offline, supports local co-op, and features stellar native Linux support."
+    },
+    {
+      "game_id": "doom_classic_complete",
+      "title": "DOOM (Classic)",
+      "developer": "id Software",
+      "steam_id": "2280",
+      "ethical_reason": "The ultimate triumph of game preservation. id Software released the engine's source code, allowing the community to build countless open-source ports. It is entirely DRM-free, universally compatible, and stands as a timeless, complete experience with zero microtransactions."
+    },
+    {
+      "game_id": "quake",
+      "title": "Quake",
+      "developer": "id Software",
+      "steam_id": "2310",
+      "ethical_reason": "Pioneered community empowerment by releasing its source code. The recent official remasters respect early adopters by providing the upgrade for free. It features zero monetization beyond the initial purchase, massive mod support, and total cross-platform and Linux compatibility."
+    },
+    {
+      "game_id": "quake_2",
+      "title": "Quake II",
+      "developer": "id Software",
+      "steam_id": "2320",
+      "ethical_reason": "Follows the exact same open-source, community-driven philosophy as its predecessor. The remastered version was gifted to existing owners and includes all expansions for free. It is DRM-free, respects player ownership, and features impeccable compatibility without predatory mechanics."
+    },
+    {
+      "game_id": "kingdom_come_deliverance",
+      "title": "Kingdom Come: Deliverance",
+      "developer": "Warhorse Studios",
+      "steam_id": "379430",
+      "ethical_reason": "A pure, uncompromising single-player historical RPG with strictly zero microtransactions or live-service mechanics. Warhorse Studios respects the player's purchase, offering substantial, story-rich expansions rather than predatory cosmetic shops. It also boasts excellent out-of-the-box performance via Proton."
+    },
+    {
+      "game_id": "kingdom_come_deliverance_2",
+      "title": "Kingdom Come: Deliverance II",
+      "developer": "Warhorse Studios",
+      "steam_id": "1771300",
+      "ethical_reason": "Continues the studio's staunch commitment to massive, single-player, buy-to-play experiences. It explicitly rejects modern predatory monetization trends and forced multiplayer, ensuring a complete, immersive narrative package upon purchase while maintaining strong compatibility standards."
+    },
+    {
+      "game_id": "stray",
+      "title": "Stray",
+      "developer": "BlueTwelve Studio",
+      "steam_id": "1332010",
+      "ethical_reason": "A perfectly self-contained, beautifully crafted single-player adventure. BlueTwelve Studio and Annapurna Interactive delivered a complete artistic vision with absolutely zero microtransactions, live-service mechanics, or hidden costs. It highly respects the player's time and runs flawlessly on Linux via Proton."
+    }
+  ]  
+}
+
+
+
+
+
+
+
+
+
+
+
+

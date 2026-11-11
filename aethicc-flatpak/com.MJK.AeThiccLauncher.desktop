@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Ae Thicc Launcher
+Comment=An Ethical Launcher for non-original games
+Exec=AeThiccLauncher
+Icon=com.MJK.AeThiccLauncher
+Terminal=false
+Type=Application
+Categories=Game;Utility;

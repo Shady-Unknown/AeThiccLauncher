@@ -1,0 +1,373 @@
+{
+  "schema": 1,
+  "refs": {
+    "portal_hours": 3.0,
+    "lotr_extended_hours": 11.4,
+    "skyrim_main_hours": 34.0,
+    "elden_ring_main_hours": 58.0,
+    "cake_hours": 1.0,
+    "rohirrim_budget_cents": 3000000000,
+    "gta_v_budget_cents": 26500000000,
+    "cyberpunk_budget_cents": 44190000000,
+    "star_citizen_budget_cents": 88500000000,
+    "undertale_budget_cents": 5112400,
+    "hardware": {
+      "steam_deck_oled_cents": 78900,
+      "switch_2_cents": 49999
+    },
+    "fx_to_usd": {
+      "USD": 1.0,
+      "EUR": 1.08,
+      "GBP": 1.27,
+      "CAD": 0.73,
+      "AUD": 0.66,
+      "PLN": 0.25,
+      "JPY": 0.0067,
+      "CNY": 0.14,
+      "KRW": 0.00072,
+      "BRL": 0.18,
+      "MXN": 0.055,
+      "INR": 0.012,
+      "CHF": 1.12,
+      "SEK": 0.095,
+      "NOK": 0.093,
+      "DKK": 0.145,
+      "TRY": 0.028,
+      "RUB": 0.011,
+      "UAH": 0.024,
+      "ZAR": 0.055
+    }
+  },
+  "phrases": [
+    {
+      "id": "cph_01",
+      "category": "cost_per_hour",
+      "when": {"price_known": true, "hours_min": 1},
+      "text": "{hours_game}h in {game}. At the official {price}, that works out to about {cents_per_hour} an hour. {dev} earned the bread."
+    },
+    {
+      "id": "cph_02",
+      "category": "cost_per_hour",
+      "when": {"price_known": true, "hours_min": 1},
+      "text": "At the official price, {game} works out to {cents_per_hour} per hour. Cheap entertainment, expensive backlog."
+    },
+    {
+      "id": "cph_03",
+      "category": "cost_per_hour",
+      "when": {"price_known": true, "game_hours_min": 1},
+      "text": "At the official {price}, {game} costs {cents_per_hour} per hour. Lower is better; this is the good kind of small number."
+    },
+    {
+      "id": "cph_04",
+      "category": "cost_per_hour",
+      "when": {"price_known": true, "game_hours_min": 1},
+      "text": "{hours_game}h in {game} at {price}. That is {cents_per_hour}/h. The wallet approves."
+    },
+    {
+      "id": "hpd_01",
+      "category": "hours_per_dollar",
+      "when": {"selected": true, "price_positive": true, "hours_per_dollar_known": true, "hours_per_dollar_min": 0.1, "cinema_multiple_min": 0.2, "game_hours_min": 1},
+      "text": "In {game} you get about {hours_per_dollar} hours per {currency_name}. That is {cinema_multiple}× the cinema rate. The popcorn lobby is in shambles."
+    },
+    {
+      "id": "hpd_02",
+      "category": "hours_per_dollar",
+      "when": {"selected": true, "price_positive": true, "hours_per_dollar_known": true, "minutes_per_dollar_min": 2, "game_hours_min": 1},
+      "text": "{minutes_per_dollar} minutes of {game} per {currency_name}. Cinema gives you {cinema_minutes}. Math has spoken."
+    },
+    {
+      "id": "hpd_03",
+      "category": "hours_per_dollar",
+      "when": {"selected": true, "price_positive": true, "hours_per_dollar_known": true, "hours_per_dollar_min": 0.1, "game_hours_min": 1},
+      "text": "At the official {price}, {game} returns {hours_per_dollar} hours per {currency_name}. Not literal money, but the vibe is there."
+    },
+    {
+      "id": "cinema_01",
+      "category": "value_vs_cinema",
+      "when": {"price_known": true, "hours_min": 1},
+      "text": "The official price is {price} for {game}. Cinema charges about {cinema_rate} an hour for stale popcorn. You win this one."
+    },
+    {
+      "id": "cinema_02",
+      "category": "value_vs_cinema",
+      "when": {"selected": true, "price_positive": true, "hours_per_dollar_known": true, "cinema_multiple_min": 0.2, "game_hours_min": 1},
+      "text": "{cinema_multiple}× the cinema rate. {game} is carrying the entire entertainment budget."
+    },
+    {
+      "id": "sealed_01",
+      "category": "still_sealed",
+      "when": {"unplayed_min": 1},
+      "text": "{sealed_game} is still sealed. The wallet remembers, even if the backlog does not."
+    },
+    {
+      "id": "sealed_02",
+      "category": "still_sealed",
+      "when": {"unplayed_min": 1},
+      "text": "A pristine copy of {sealed_game} is waiting. No pressure. Just a gentle, glowing reminder."
+    },
+    {
+      "id": "sealed_03",
+      "category": "still_sealed",
+      "when": {"unplayed_min": 1},
+      "text": "{sealed_game} is still sealed. It's dangerous to go alone; take this backlog."
+    },
+    {
+      "id": "sealed_04",
+      "category": "still_sealed",
+      "when": {"unplayed_min": 1},
+      "text": "{sealed_game} has never been launched. The princess is in another castle."
+    },
+    {
+      "id": "marathon_01",
+      "category": "marathon",
+      "when": {"session_minutes_min": 120},
+      "text": "{session_hours}h in one sitting. Hydration is a feature, not a suggestion."
+    },
+    {
+      "id": "marathon_02",
+      "category": "marathon",
+      "when": {"session_minutes_min": 120},
+      "text": "{session_hours}h in one sitting. Hydrate, Tarnished."
+    },
+    {
+      "id": "night_01",
+      "category": "night_owl",
+      "when": {"night_owl": true},
+      "text": "A session ended around {end_time}. The night shift is proud of you."
+    },
+    {
+      "id": "night_02",
+      "category": "night_owl",
+      "when": {"night_owl": true},
+      "text": "A session ended at {end_time}. The night is dark and full of side quests."
+    },
+    {
+      "id": "streak_01",
+      "category": "streak",
+      "when": {"streak_min": 2},
+      "text": "{streak} days in a row. Consistency looks good on you."
+    },
+    {
+      "id": "streak_02",
+      "category": "streak",
+      "when": {"streak_min": 2},
+      "text": "Day {streak} of the current streak. The launcher is taking notes, affectionately."
+    },
+    {
+      "id": "streak_03",
+      "category": "streak",
+      "when": {"streak_min": 2},
+      "text": "{streak} days in a row. The princess is in another castle; you keep going anyway."
+    },
+    {
+      "id": "streak_04",
+      "category": "streak",
+      "when": {"streak_min": 2},
+      "text": "Day {streak} of the streak. The cake is a lie; consistency is not."
+    },
+    {
+      "id": "library_01",
+      "category": "library_value",
+      "when": {"library_value_known": true},
+      "text": "Your library is worth {library_value}. The backlog is an investment, allegedly."
+    },
+    {
+      "id": "library_02",
+      "category": "library_value",
+      "when": {"library_value_known": true, "hardware_known": true, "steam_deck_min": 1},
+      "text": "Your library is worth {library_value}. That is about {steam_deck_units}× a Steam Deck OLED at {steam_deck_price}. Portable backlog, unlocked."
+    },
+    {
+      "id": "library_03",
+      "category": "library_value",
+      "when": {"library_hours_per_dollar_known": true, "library_hours_per_dollar_min": 0.1, "cinema_multiple_library_min": 0.2},
+      "text": "Your library returns {library_hours_per_dollar} hours per {currency_name}, or {cinema_multiple_library}× the cinema rate. The math is on your side."
+    },
+    {
+      "id": "genre_01",
+      "category": "genre_devotion",
+      "when": {"genre_hours_min": 5},
+      "text": "{genre} keeps winning your attention. {genre_hours}h and counting."
+    },
+    {
+      "id": "genre_02",
+      "category": "genre_devotion",
+      "when": {"genre_hours_min": 5},
+      "text": "{genre} keeps winning: {genre_hours}h. Praise the sun."
+    },
+    {
+      "id": "game_generic_01",
+      "category": "game_generic",
+      "when": {"game_hours_min": 1},
+      "text": "{hours_game}h in {game}. No price on file, but the time is real."
+    },
+    {
+      "id": "game_generic_02",
+      "category": "game_generic",
+      "when": {"game_hours_min": 1},
+      "text": "{game} has {hours_game}h on the clock. The wallet has no comment."
+    },
+    {
+      "id": "game_generic_03",
+      "category": "game_generic",
+      "when": {"game_hours_min": 1},
+      "text": "{hours_game}h in {game}. The cake is a lie; the playtime is not."
+    },
+    {
+      "id": "game_generic_04",
+      "category": "game_generic",
+      "when": {"game_hours_min": 1},
+      "text": "{game} has {hours_game}h on the clock. The Tarnished would be proud."
+    },
+    {
+      "id": "nerd_hours_01",
+      "category": "nerd_hours",
+      "when": {"selected": true, "game_hours_min": 3},
+      "text": "{hours_game}h in {game} is {portal_runs}× a full Portal run. The cake is a lie; the hours are not."
+    },
+    {
+      "id": "nerd_hours_02",
+      "category": "nerd_hours",
+      "when": {"selected": true, "game_hours_min": 1},
+      "text": "{hours_game}h in {game}: enough to bake {cake_runs}× a cake. The cake is a lie, but the oven timer is real."
+    },
+    {
+      "id": "nerd_hours_03",
+      "category": "nerd_hours",
+      "when": {"selected": true, "game_hours_min": 12},
+      "text": "{hours_game}h in {game} would cover {lotr_runs}× the extended Lord of the Rings trilogy. One does not simply walk into Mordor; you sprint."
+    },
+    {
+      "id": "nerd_hours_04",
+      "category": "nerd_hours",
+      "when": {"selected": true, "game_hours_min": 34},
+      "text": "{hours_game}h in {game} is {skyrim_runs}× the Skyrim main story. Todd Howard sends his regards."
+    },
+    {
+      "id": "nerd_hours_05",
+      "category": "nerd_hours",
+      "when": {"selected": true, "game_hours_min": 58},
+      "text": "{hours_game}h in {game}: {elden_runs}× the Elden Ring main story. The Tarnished could have rested."
+    },
+    {
+      "id": "nerd_hours_06",
+      "category": "nerd_hours",
+      "when": {"selected": false, "hours_min": 12},
+      "text": "{hours}h across the library would cover {lotr_runs_library}× the extended Lord of the Rings trilogy. One does not simply walk into Mordor; you sprint."
+    },
+    {
+      "id": "nerd_hours_07",
+      "category": "nerd_hours",
+      "when": {"selected": false, "hours_min": 3},
+      "text": "{hours}h across the library is {portal_runs_library}× a full Portal run. The cake is a lie; the hours are not."
+    },
+    {
+      "id": "nerd_hours_08",
+      "category": "nerd_hours",
+      "when": {"selected": false, "hours_min": 1},
+      "text": "{hours}h across the library: enough to bake {cake_runs_library}× a cake. The cake is a lie, but the oven timer is real."
+    },
+    {
+      "id": "nerd_value_01",
+      "category": "nerd_value",
+      "when": {"library_value_known": true, "price_positive": true, "copies_of_game_min": 1},
+      "text": "Your library is worth {library_value}: {copies_of_game}× the price of {game}. The backlog is now a collection."
+    },
+    {
+      "id": "nerd_value_02",
+      "category": "nerd_value",
+      "when": {"library_value_known": true, "hardware_known": true, "steam_deck_min": 1},
+      "text": "Converted to hardware, {library_value} is about {steam_deck_units}× a Steam Deck OLED at {steam_deck_price}. Choose your fighter."
+    },
+    {
+      "id": "nerd_value_03",
+      "category": "nerd_value",
+      "when": {"library_value_known": true, "hardware_known": true, "switch_known": true, "steam_deck_min": 1, "switch2_min": 1},
+      "text": "Your library could buy about {steam_deck_units}× a Steam Deck OLED, or {switch2_units}× a Switch 2. Choose your fighter."
+    },
+    {
+      "id": "nerd_value_04",
+      "category": "nerd_value",
+      "when": {"library_value_known": true, "unplayed_value_known": true},
+      "text": "The unplayed shelf alone is {unplayed_value}: {unplayed_share}% of the library. The cake is a lie; the backlog is very real."
+    },
+    {
+      "id": "nerd_value_05",
+      "category": "nerd_value",
+      "when": {"library_value_known": true, "unplayed_value_known": true, "price_positive": true, "backlog_copies_min": 1},
+      "text": "The unplayed part is worth {backlog_copies}× the price of {game}. That is not a backlog, that is a museum."
+    },
+    {
+      "id": "nerd_value_06",
+      "category": "nerd_value",
+      "when": {"library_value_known": true},
+      "text": "Your {library_value} library would have funded {undertale_percent}% of Undertale's {undertale_budget} Kickstarter. Determination detected."
+    },
+    {
+      "id": "nerd_value_07",
+      "category": "nerd_value",
+      "when": {"library_value_known": true},
+      "text": "Your library is {rohirrim_percent}% of The War of the Rohirrim's {rohirrim_budget} budget. Rohan is not impressed."
+    },
+    {
+      "id": "nerd_value_08",
+      "category": "nerd_value",
+      "when": {"library_value_known": true},
+      "text": "Your library is {gta_v_percent}% of GTA V's {gta_v_budget} budget. The rest was probably marketing."
+    },
+    {
+      "id": "nerd_value_09",
+      "category": "nerd_value",
+      "when": {"library_value_known": true},
+      "text": "Your library is {cyberpunk_percent}% of Cyberpunk 2077's {cyberpunk_budget} budget. Wake up, samurai."
+    },
+    {
+      "id": "nerd_value_10",
+      "category": "nerd_value",
+      "when": {"library_value_known": true},
+      "text": "Your library is {star_citizen_percent}% of Star Citizen's {star_citizen_budget} crowdfunding. The ship is still in alpha."
+    },
+    {
+      "id": "generic_01",
+      "category": "generic",
+      "when": {},
+      "text": "{hours}h logged across {sessions} sessions. That is a lot of worlds visited."
+    },
+    {
+      "id": "generic_02",
+      "category": "generic",
+      "when": {},
+      "text": "You have tracked {tracked}h in the launcher and imported {imported}h from Steam. Both count."
+    },
+    {
+      "id": "generic_03",
+      "category": "generic",
+      "when": {},
+      "text": "{games} games installed, {played} played, {never} still waiting for a first launch."
+    },
+    {
+      "id": "generic_04",
+      "category": "generic",
+      "when": {},
+      "text": "War. War never changes. Your playtime does: {hours}h and counting."
+    },
+    {
+      "id": "generic_05",
+      "category": "generic",
+      "when": {},
+      "text": "Hey you, you're finally awake. {hours}h logged, and the backlog still has quests."
+    },
+    {
+      "id": "generic_06",
+      "category": "generic",
+      "when": {},
+      "text": "Achievement unlocked: {hours}h played. No gamerscore attached, just memories."
+    },
+    {
+      "id": "generic_07",
+      "category": "generic",
+      "when": {},
+      "text": "You have {never} unplayed games. The cake is a lie; the Steam sale was not."
+    }
+  ]
+}

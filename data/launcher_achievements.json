@@ -1,0 +1,552 @@
+{
+  "schema": 1,
+  "pack": {
+    "id": "launcher",
+    "title": "Launcher",
+    "description": "Generic launcher achievements: platform, library, behaviour, time and nudge."
+  },
+  "achievements": [
+    {
+      "id": "the_arrival",
+      "title": "The Arrival",
+      "desc": "Open Ae Thicc Launcher for the first time.",
+      "category": "platform",
+      "icon": "the_arrival",
+      "hidden": false,
+      "trigger": {
+        "stat": "launcher_starts",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "the_archivist",
+      "title": "The Archivist",
+      "desc": "Point the launcher at your SteamRip games folder.",
+      "category": "behavior",
+      "icon": "the_archivist",
+      "hidden": false,
+      "trigger": {
+        "stat": "library_folder_configured",
+        "op": "==",
+        "value": true
+      }
+    },
+    {
+      "id": "nerdy_temp",
+      "title": "Nerdy Stuff Requires Nerdy Ways",
+      "desc": "Move the temporary cache folder somewhere else.",
+      "category": "behavior",
+      "icon": "nerdy_temp",
+      "hidden": false,
+      "trigger": {
+        "stat": "temp_folder_customized",
+        "op": "==",
+        "value": true
+      }
+    },
+    {
+      "id": "interior_decorator",
+      "title": "Interior Decorator",
+      "desc": "Create or customize a launcher theme.",
+      "category": "behavior",
+      "icon": "interior_decorator",
+      "hidden": false,
+      "trigger": {
+        "stat": "theme_customized",
+        "op": "==",
+        "value": true
+      }
+    },
+    {
+      "id": "globetrotter",
+      "title": "Globetrotter",
+      "desc": "Set the price region to anything other than US.",
+      "category": "behavior",
+      "icon": "globetrotter",
+      "hidden": false,
+      "trigger": {
+        "stat": "region_non_default",
+        "op": "==",
+        "value": true
+      }
+    },
+    {
+      "id": "ethical_penguin",
+      "title": "Ethical Penguin",
+      "desc": "Start the launcher on Linux.",
+      "category": "platform",
+      "icon": "ethical_penguin",
+      "hidden": false,
+      "trigger": {
+        "event": "launcher_start",
+        "where": {
+          "os": "linux"
+        }
+      }
+    },
+    {
+      "id": "deckhead",
+      "title": "Deckhead",
+      "desc": "Start the launcher from its Flatpak build.",
+      "category": "platform",
+      "icon": "deckhead",
+      "hidden": false,
+      "trigger": {
+        "event": "launcher_start",
+        "where": {
+          "flatpak": true
+        }
+      }
+    },
+    {
+      "id": "collectors_edition",
+      "title": "Collector's Edition",
+      "desc": "Install five different games over time.",
+      "category": "library",
+      "icon": "collectors_edition",
+      "hidden": false,
+      "group": "library_size",
+      "trigger": {
+        "stat": "distinct_titles_ever",
+        "op": ">=",
+        "value": 5
+      }
+    },
+    {
+      "id": "supermega_deluxe",
+      "title": "SuperMega Deluxe Megaman Ultra Edition",
+      "desc": "Install one hundred different games over time. Yes, one hundred.",
+      "category": "library",
+      "icon": "supermega_deluxe",
+      "hidden": false,
+      "group": "library_size",
+      "trigger": {
+        "stat": "distinct_titles_ever",
+        "op": ">=",
+        "value": 100
+      }
+    },
+    {
+      "id": "fanboy",
+      "title": "Fanboy",
+      "desc": "Install three games from the same developer.",
+      "category": "library",
+      "icon": "fanboy",
+      "hidden": false,
+      "trigger": {
+        "stat": "max_titles_by_developer",
+        "op": ">=",
+        "value": 3
+      }
+    },
+    {
+      "id": "publishers_pet",
+      "title": "Publisher's Pet",
+      "desc": "Install three games from the same publisher.",
+      "category": "library",
+      "icon": "publishers_pet",
+      "hidden": false,
+      "trigger": {
+        "stat": "max_titles_by_publisher",
+        "op": ">=",
+        "value": 3
+      }
+    },
+    {
+      "id": "polyglot",
+      "title": "Polyglot",
+      "desc": "Have five different genres installed at the same time.",
+      "category": "library",
+      "icon": "polyglot",
+      "hidden": false,
+      "trigger": {
+        "stat": "genres_count_current",
+        "op": ">=",
+        "value": 5
+      }
+    },
+    {
+      "id": "gold_digger",
+      "title": "Gold Digger",
+      "desc": "Install a Gold Tier title.",
+      "category": "nudge",
+      "icon": "gold_digger",
+      "hidden": false,
+      "trigger": {
+        "stat": "gold_tier_count_current",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "its_not_you",
+      "title": "It's Not You, It's Me",
+      "desc": "Uninstall a game. No hard feelings.",
+      "category": "library",
+      "icon": "its_not_you",
+      "hidden": false,
+      "trigger": {
+        "stat": "games_removed_total",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "prodigal_son",
+      "title": "The Prodigal Son",
+      "desc": "Install a game you had removed before.",
+      "category": "library",
+      "icon": "prodigal_son",
+      "hidden": true,
+      "trigger": {
+        "stat": "reinstalled_titles_count",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "night_shift",
+      "title": "Night Shift",
+      "desc": "Open the launcher between midnight and 05:00.",
+      "category": "platform",
+      "icon": "night_shift",
+      "hidden": false,
+      "trigger": {
+        "event": "launcher_start",
+        "where": {
+          "local_hour_min": 0,
+          "local_hour_max": 5
+        }
+      }
+    },
+    {
+      "id": "early_bird",
+      "title": "Early Bird",
+      "desc": "Open the launcher between 05:00 and 07:00.",
+      "category": "platform",
+      "icon": "early_bird",
+      "hidden": false,
+      "trigger": {
+        "event": "launcher_start",
+        "where": {
+          "local_hour_min": 5,
+          "local_hour_max": 7
+        }
+      }
+    },
+    {
+      "id": "the_owl",
+      "title": "The Owl",
+      "desc": "Install a game between 04:00 and 06:00.",
+      "category": "time",
+      "icon": "the_owl",
+      "hidden": true,
+      "trigger": {
+        "event": "game_installed",
+        "where": {
+          "local_hour_min": 4,
+          "local_hour_max": 6
+        }
+      }
+    },
+    {
+      "id": "weekend_warrior",
+      "title": "Weekend Warrior",
+      "desc": "Spend at least half of your tracked hours on weekends (minimum 10 hours).",
+      "category": "time",
+      "icon": "weekend_warrior",
+      "hidden": false,
+      "trigger": {
+        "all": [
+          {
+            "stat": "weekend_hours_ratio",
+            "op": ">=",
+            "value": 0.5
+          },
+          {
+            "stat": "hours_total",
+            "op": ">=",
+            "value": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "streak_1",
+      "title": "Streak I: Warm-Up",
+      "desc": "Play on three consecutive days.",
+      "category": "behavior",
+      "icon": "streak_1",
+      "hidden": false,
+      "group": "streak",
+      "trigger": {
+        "stat": "streak_days",
+        "op": ">=",
+        "value": 3
+      }
+    },
+    {
+      "id": "streak_2",
+      "title": "Streak II: Habit",
+      "desc": "Play on seven consecutive days.",
+      "category": "behavior",
+      "icon": "streak_2",
+      "hidden": false,
+      "group": "streak",
+      "trigger": {
+        "stat": "streak_days",
+        "op": ">=",
+        "value": 7
+      }
+    },
+    {
+      "id": "streak_3",
+      "title": "Streak III: Ritual",
+      "desc": "Play on thirty consecutive days.",
+      "category": "behavior",
+      "icon": "streak_3",
+      "hidden": false,
+      "group": "streak",
+      "trigger": {
+        "stat": "streak_days",
+        "op": ">=",
+        "value": 30
+      }
+    },
+    {
+      "id": "press_start",
+      "title": "Press Start",
+      "desc": "Launch your first game from the launcher.",
+      "category": "behavior",
+      "icon": "press_start",
+      "hidden": false,
+      "trigger": {
+        "stat": "launches_total",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "taster",
+      "title": "Taster",
+      "desc": "Play five different games in a single day.",
+      "category": "behavior",
+      "icon": "taster",
+      "hidden": false,
+      "trigger": {
+        "stat": "max_distinct_titles_per_day",
+        "op": ">=",
+        "value": 5
+      }
+    },
+    {
+      "id": "marathon",
+      "title": "Marathon",
+      "desc": "Finish a session of at least four hours.",
+      "category": "behavior",
+      "icon": "marathon",
+      "hidden": false,
+      "trigger": {
+        "stat": "max_session_seconds",
+        "op": ">=",
+        "value": 14400
+      }
+    },
+    {
+      "id": "iron_butt",
+      "title": "Iron Butt",
+      "desc": "Finish a session of at least eight hours. Drink some water.",
+      "category": "behavior",
+      "icon": "iron_butt",
+      "hidden": false,
+      "trigger": {
+        "stat": "max_session_seconds",
+        "op": ">=",
+        "value": 28800
+      }
+    },
+    {
+      "id": "one_more_session",
+      "title": "One More Session",
+      "desc": "Log one hundred play sessions.",
+      "category": "behavior",
+      "icon": "one_more_session",
+      "hidden": false,
+      "trigger": {
+        "stat": "sessions_total",
+        "op": ">=",
+        "value": 100
+      }
+    },
+    {
+      "id": "century",
+      "title": "Century",
+      "desc": "Reach one hundred total hours, tracked or imported.",
+      "category": "behavior",
+      "icon": "century",
+      "hidden": false,
+      "trigger": {
+        "stat": "hours_total",
+        "op": ">=",
+        "value": 100
+      }
+    },
+    {
+      "id": "the_thousand",
+      "title": "The Thousand",
+      "desc": "Reach one thousand total hours.",
+      "category": "behavior",
+      "icon": "the_thousand",
+      "hidden": false,
+      "trigger": {
+        "stat": "hours_total",
+        "op": ">=",
+        "value": 1000
+      }
+    },
+    {
+      "id": "long_haul",
+      "title": "Long Haul",
+      "desc": "Spend fifty hours in a single game.",
+      "category": "behavior",
+      "icon": "long_haul",
+      "hidden": false,
+      "trigger": {
+        "stat": "max_hours_by_title",
+        "op": ">=",
+        "value": 50
+      }
+    },
+    {
+      "id": "the_comeback",
+      "title": "The Comeback",
+      "desc": "Return to a game after at least ninety days away.",
+      "category": "behavior",
+      "icon": "the_comeback",
+      "hidden": true,
+      "trigger": {
+        "stat": "comeback_detected",
+        "op": "==",
+        "value": true
+      }
+    },
+    {
+      "id": "still_sealed",
+      "title": "Still Sealed",
+      "desc": "Have ten installed games you have never launched from the launcher.",
+      "category": "nudge",
+      "icon": "still_sealed",
+      "hidden": true,
+      "trigger": {
+        "stat": "never_launched_count",
+        "op": ">=",
+        "value": 10
+      }
+    },
+    {
+      "id": "hopper",
+      "title": "Hopper",
+      "desc": "Download through three different hosters.",
+      "category": "behavior",
+      "icon": "hopper",
+      "hidden": false,
+      "trigger": {
+        "stat": "hosters_used",
+        "op": ">=",
+        "value": 3
+      }
+    },
+    {
+      "id": "same_page",
+      "title": "Same Page",
+      "desc": "Resume an interrupted download.",
+      "category": "behavior",
+      "icon": "same_page",
+      "hidden": false,
+      "trigger": {
+        "stat": "resumes_total",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "trailer_park",
+      "title": "Trailer Park",
+      "desc": "Watch five game trailers.",
+      "category": "behavior",
+      "icon": "trailer_park",
+      "hidden": false,
+      "trigger": {
+        "stat": "trailers_watched_titles",
+        "op": ">=",
+        "value": 5
+      }
+    },
+    {
+      "id": "deal_hunter",
+      "title": "Deal Hunter",
+      "desc": "Spot ten price drops in your library.",
+      "category": "behavior",
+      "icon": "deal_hunter",
+      "hidden": false,
+      "trigger": {
+        "stat": "discounted_titles_seen",
+        "op": ">=",
+        "value": 10
+      }
+    },
+    {
+      "id": "clean_slate",
+      "title": "Clean Slate",
+      "desc": "Recover an orphaned game folder.",
+      "category": "behavior",
+      "icon": "clean_slate",
+      "hidden": false,
+      "trigger": {
+        "stat": "orphans_recovered",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "backup_buddy",
+      "title": "Backup Buddy",
+      "desc": "Create your first save backup.",
+      "category": "behavior",
+      "icon": "backup_buddy",
+      "hidden": false,
+      "trigger": {
+        "stat": "backups_total",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "update_hunter",
+      "title": "Update Hunter",
+      "desc": "Apply a game update.",
+      "category": "behavior",
+      "icon": "update_hunter",
+      "hidden": false,
+      "trigger": {
+        "stat": "updates_applied",
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "id": "worth_every_cent",
+      "title": "Worth Every Cent",
+      "desc": "Have a game with at least one hour played and a cost per hour below your cinema index.",
+      "category": "nudge",
+      "icon": "worth_every_cent",
+      "hidden": true,
+      "trigger": {
+        "stat": "games_below_cinema_rate",
+        "op": ">=",
+        "value": 1
+      }
+    }
+  ]
+}
