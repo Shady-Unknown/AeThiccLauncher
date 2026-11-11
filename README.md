@@ -1,8 +1,10 @@
 <img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/DiscoveryTab.png" height="120" align="left" alt="Discovery" /><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/Schermata_20260607_000046.png" height="120" align="left" alt="Screen2" /><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/Schermata_20260607_000113.png" height="120" align="left" alt="Screen1" /><img src="https://github.com/user-attachments/assets/aee3be07-55c2-4a5d-904a-d4d1a69092ef" width="120" align="left" alt="Logo" />
 
 
-## Community
 
+
+
+## Community
 <a href="https://discord.gg/4WF7YU3ynC"><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/discorda.jpg" width="80" align="left" alt="Ae Thicc Launcher Discord" /></a>
 
 **Join the Ae Thicc Launcher Discord** — get help with setup, report bugs, suggest features, or just hang out and talk games.
