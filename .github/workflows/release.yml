@@ -39,15 +39,13 @@ jobs:
           .\.venv\Scripts\Activate.ps1
           .\build_win.ps1
 
-      - name: Zip the Distribution Folder
-        # Comprimiamo tutto il contenuto della cartella 'dist' creata dal tuo script
-        run: Compress-Archive -Path "dist\*" -DestinationPath "Ae_Thicc_Launcher_Windows.zip"
-
-      - name: Upload Windows Artifact
+      - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: Ae_Thicc_Launcher_Windows.zip
+          path: |
+            dist/Ae_Thicc_Launcher_Windows.zip
+            dist/Ae_Thicc_Launcher_Setup.exe
           retention-days: 1
   # ==========================================
   # 2. BUILD LINUX (Flatpak su Fedora 38)
@@ -147,4 +145,5 @@ jobs:
             Automated build from commit: ${{ github.event.head_commit.message }}
           files: |
             Ae_Thicc_Launcher_Windows.zip
+            Ae_Thicc_Launcher_Setup.exe
             Ae_Thicc_Launcher_Linux.flatpak
