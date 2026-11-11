@@ -102,7 +102,7 @@ class SmartDownloaderWorker(QThread):
                 return
 
         if not self._is_cancelled:
-            self.finished_error.emit(f"Link scaduto {MAX_RESOLVE_RETRIES} volte di seguito. Impossibile completare il download.")
+            self.finished_error.emit(f"Link expired {MAX_RESOLVE_RETRIES} times in a row. Could not complete the download.")
 
     def _attempt_download(self, url: str) -> str:
         import time
@@ -132,10 +132,13 @@ class SmartDownloaderWorker(QThread):
                 headers.pop('Range', None)
 
             try:
+                # timeout=(connect, low-speed): no total cap (multi-GB files take
+                # hours), but if the connection stalls at 0 B/s for ~2 minutes
+                # libcurl aborts and the loop auto-resumes.
                 r = requests.get(
                     url, headers=headers, cookies=self.cookies, 
                     stream=True, impersonate="chrome120",
-                    timeout=0 
+                    timeout=(30, 90) 
                 )
 
                 if r.status_code in (403, 410, 401, 404): 
@@ -149,7 +152,7 @@ class SmartDownloaderWorker(QThread):
                 if 'text/html' in content_type:
                     if r.status_code in (200,) and downloaded_bytes > 0:
                         return "LINK_EXPIRED"
-                    raise Exception("Il server ha bloccato la richiesta (pagina HTML).")
+                    raise Exception("The server blocked the request (HTML page).")
 
                 r.raise_for_status()
 
@@ -172,7 +175,7 @@ class SmartDownloaderWorker(QThread):
                     self.resume_detected.emit(float(downloaded_bytes), float(total_bytes))
 
                 if total_bytes > 0 and total_bytes < 1000000 and downloaded_bytes == 0:
-                    raise Exception(f"File troppo piccolo ({total_bytes} bytes). Possibile blocco.")
+                    raise Exception(f"File too small ({total_bytes} bytes). Possible block.")
 
                 last_emit = time.time()
                 
@@ -192,7 +195,7 @@ class SmartDownloaderWorker(QThread):
                                 last_emit = now
                 
                 if total_bytes > 0 and downloaded_bytes < total_bytes:
-                    raise Exception("Stream interrotto prematuramente dal server.")
+                    raise Exception("Stream interrupted early by the server.")
 
                 # Some hosts omit Content-Length or close the stream cleanly
                 # before the archive is complete. Ask 7-Zip to read the
@@ -201,7 +204,7 @@ class SmartDownloaderWorker(QThread):
                     self.dest_path
                 ):
                     raise Exception(
-                        "Archivio incompleto: il download non è terminato."
+                        "Incomplete archive: the download did not finish."
                     )
 
                 self.progress_update.emit(float(total_bytes), float(total_bytes))
@@ -214,4 +217,4 @@ class SmartDownloaderWorker(QThread):
                 drop_count += 1
                 time.sleep(2)
                 
-        raise Exception("Troppe disconnessioni. Impossibile terminare il download.")
+        raise Exception("Too many disconnections. Could not finish the download.")

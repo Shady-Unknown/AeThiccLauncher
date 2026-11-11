@@ -50,6 +50,9 @@ LABEL_ICONS = {
     "co-op": "info_coop",
     "coop": "info_coop",
     "co op": "info_coop",
+    "co-op by": "info_coop",
+    "coop by": "info_coop",
+    "co op by": "info_coop",
     "multiplayer": "info_coop",
     "version": "info_version",
     "build": "info_version",
@@ -72,8 +75,23 @@ def _normalize_label(label: str) -> str:
     return label.strip(" :.-")
 
 
+#: Chiavi ordinate dalla più lunga: serve per il match "prefisso + parola".
+_PREFIX_KEYS = tuple(sorted(LABEL_ICONS, key=len, reverse=True))
+
+
 def icon_for_label(label: str) -> str | None:
-    return LABEL_ICONS.get(_normalize_label(label))
+    """Icona per una label, tollerante alle varianti ("Co-op By", "OS Version")."""
+    normalized = _normalize_label(label)
+    if not normalized:
+        return None
+    icon = LABEL_ICONS.get(normalized)
+    if icon:
+        return icon
+    # Varianti tipo "Co-op By", "Game Size (GB)", "Released by (team)".
+    for key in _PREFIX_KEYS:
+        if normalized.startswith(key + " "):
+            return LABEL_ICONS[key]
+    return None
 
 
 def _split_entry(bold_text: str, full_text: str) -> tuple[str, str]:

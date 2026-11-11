@@ -78,6 +78,15 @@ class SpecParserTests(unittest.TestCase):
         self.assertEqual(items[0]["icon"], "info_pub")
         self.assertEqual(items[0]["value"], "SteamRip")
 
+    def test_coop_by_variant_has_icon(self):
+        for label in ("Co-op By", "Co-op by:", "Coop By", "Co-Op:", "Co-op"):
+            self.assertEqual(icon_for_label(label), "info_coop", label)
+
+    def test_label_prefix_variants(self):
+        self.assertEqual(icon_for_label("OS Version"), "spec_os")
+        self.assertEqual(icon_for_label("Game Size (GB)"), "info_size")
+        self.assertEqual(icon_for_label("Released by"), "info_pub")
+
     def test_icon_for_label_normalization(self):
         self.assertEqual(icon_for_label("OS:"), "spec_os")
         self.assertEqual(icon_for_label("  Processor  "), "spec_cpu")

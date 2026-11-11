@@ -3,14 +3,22 @@ import re
 import hashlib
 import time
 from curl_cffi import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 MAX_RESOLVE_RETRIES = 3
 
 # Secret baked into gofile's wt.obf.js (decoded property 'YpTwx'). Rotated
 # server-side over time; when it stops being accepted, re-extract it from a
-# fresh wt.obf.js (see the deobfuscation notes).
+# fresh https://gofile.io/js/wt.obf.js (the bundle used to live under
+# /dist/js/, it moved in the 2026 redesign). Loading that file in Node and
+# printing generateWT(<token>) gives the matching sha256 for the current bucket.
 GOFILE_WT_SECRET = "12af056dacea0b"
+
+# Shared cache for the GoFile guest token (each download builds a new
+# LinkResolver, so without it we minted a fresh guest account per file and hit
+# the per-IP rate limit).
+GOFILE_TOKEN_TTL = 30 * 60
+_GOFILE_TOKEN = {'value': None, 'expires': 0.0}
 
 
 def generate_gofile_wt(user_agent, account_token, language="en-US", now_ts=None) -> str:
@@ -66,6 +74,7 @@ HOSTER_RESOLVERS = {
     'buzzheavier.com':  '_resolve_buzzheavier',
     'bzzhr.to':         '_resolve_buzzheavier',
     'megadb.xyz':       '_resolve_megadb',
+    'megadb.net':       '_resolve_megadb',
     'pixeldrain.com':   '_resolve_pixeldrain',
     'gofile.io':        '_resolve_gofile',
 }
@@ -93,6 +102,7 @@ class LinkResolver:
         }
         if referer:
             self.base_headers['Referer'] = referer
+        self.referer = referer or ''
             
         self.cf_callback = cf_callback
         self.session_cookies = {} # Mantiene i cookie estratti dal bypass per tutta la catena
@@ -148,22 +158,151 @@ class LinkResolver:
             
         raise Exception(f"Hoster non riconosciuto e URL non diretto: {url}")
 
+    def _get_page_text(self, url, timeout=30, max_bytes=2 * 1024 * 1024, extra_headers=None):
+        """GET with a bounded read: when the server actually serves a file this
+        returns None instead of pulling gigabytes into RAM (the old cause of the
+        curl timeouts on CDN links)."""
+        headers = {**self.base_headers, **(extra_headers or {})}
+        r = requests.get(
+            url, headers=headers, cookies=self.session_cookies,
+            impersonate="chrome120", timeout=timeout, stream=True
+        )
+        try:
+            self.session_cookies.update(r.cookies.get_dict())
+        except Exception:
+            pass
+
+        ct = (r.headers.get('content-type') or '').lower()
+        if ct and not any(t in ct for t in ('html', 'text', 'json', 'xml')):
+            r.close()
+            return None
+
+        buf = bytearray()
+        try:
+            for chunk in r.iter_content():
+                buf.extend(chunk)
+                if len(buf) >= max_bytes:
+                    break
+        finally:
+            r.close()
+        # Without a content-type the server may still be serving an archive:
+        # binary bytes (NUL) give it away, so treat it as a direct link instead
+        # of decoding it as HTML.
+        if b'\x00' in bytes(buf[:512]):
+            return None
+        return bytes(buf).decode('utf-8', 'replace')
+
     def _resolve_megadb(self, url: str) -> tuple[str, dict]:
         print(f"[Resolver] Risoluzione MegaDB in corso per: {url}")
-        if '/d/' in url:
+
+        # Already a CDN link: never GET a multi-GB file into memory.
+        path_lower = urlparse(url).path.lower()
+        if (
+            '/d/' in url
+            or 'download_token=' in url
+            or re.search(r'\.(?:rar|zip|7z|iso|part\d+)$', path_lower)
+        ):
             print("[MegaDB] L'URL è già un link CDN diretto. Lo passo al downloader!")
             return url, self.session_cookies
-        
-        page_r = self._get_with_cf(url, timeout=60)
-        match = re.search(r'href="(https?://[a-zA-Z0-9-]+\.megadb\.[a-z]+(?::\d+)?/d/[^"]+)"', page_r.text)
-        
+
+        # MegaDB enforces a Referer allowlist: SteamRip content accepts steamrip.com.
+        referer = self.referer if 'steamrip.com' in (self.referer or '') else 'https://steamrip.com/'
+
+        text = self._get_page_text(url, timeout=30, extra_headers={'Referer': referer})
+        if text is None:
+            print("[MegaDB] La pagina ha risposto con un file: uso l'URL così com'è.")
+            return url, self.session_cookies
+
+        # Legacy flow: direct href to /d/.
+        match = re.search(r'href="(https?://[a-zA-Z0-9-]+\.megadb\.[a-z]+(?::\d+)?/d/[^"]+)"', text)
         if match:
             direct_url = match.group(1)
             print(f"[MegaDB] Link CDN trovato: {direct_url}")
             return direct_url, self.session_cookies
-        
-        snippet = page_r.text[:200].replace('\n', ' ')
-        raise Exception(f"MegaDB Resolver Error: Link CDN non trovato. Il server ha risposto con: {snippet}...")
+
+        # New 2026 flow: finalDownloadUrl + countdown, then the CDN redirect.
+        token_url = self._extract_megadb_token_url(text)
+        if token_url:
+            last_error = None
+            for attempt in range(2):
+                if attempt:
+                    # The previous token has been burnt: reload the page to get
+                    # a fresh one (and the updated session cookie).
+                    print("[MegaDB] Token non armato, ricarico la pagina e riprovo...")
+                    text = self._get_page_text(url, timeout=30, extra_headers={'Referer': referer})
+                    token_url = self._extract_megadb_token_url(text or '')
+                    if not token_url:
+                        break
+                try:
+                    direct_url = self._follow_megadb_token(token_url, referer)
+                    print(f"[MegaDB] Link CDN risolto: {direct_url}")
+                    return direct_url, self.session_cookies
+                except Exception as exc:
+                    last_error = exc
+            if last_error:
+                raise last_error
+
+        if 'error?e=' in text:
+            err = re.search(r'error\?e=([^"\'&<]+)', text)
+            detail = err.group(1).replace('+', ' ') if err else 'unknown error'
+            raise Exception(f"MegaDB: the server rejected the request ({detail}).")
+
+        snippet = text[:200].replace('\n', ' ')
+        raise Exception(f"MegaDB Resolver Error: CDN link not found. Server response: {snippet}...")
+
+    @staticmethod
+    def _extract_megadb_token_url(html: str):
+        if not html:
+            return None
+        m = re.search(r"""finalDownloadUrl\s*=\s*['"]([^'"]+)['"]""", html)
+        if not m:
+            m = re.search(r"""['"]([^'"]+\?pt=[A-Za-z0-9%._~-]+)['"]""", html)
+        if not m:
+            return None
+        return m.group(1).replace('\\/', '/').replace('&amp;', '&')
+
+    def _follow_megadb_token(self, token_url: str, referer: str) -> str:
+        """The ?pt= token only arms itself after the countdown (10 s) and needs
+        the session cookie set by the file page. It must be used exactly once
+        after the wait: using it earlier burns it."""
+        time.sleep(12)
+        headers = {
+            **self.base_headers,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Referer': referer,
+        }
+        r = requests.get(
+            token_url, headers=headers, cookies=self.session_cookies,
+            impersonate="chrome120", timeout=30, allow_redirects=False
+        )
+        try:
+            self.session_cookies.update(r.cookies.get_dict())
+        except Exception:
+            pass
+
+        if r.status_code in (301, 302, 303, 307, 308):
+            location = r.headers.get('Location') or ''
+            if location:
+                return urljoin(token_url, location)
+
+        if r.status_code == 200:
+            body = r.text[:2 * 1024 * 1024]
+            meta = re.search(
+                r"""http-equiv=["']refresh["'][^>]*?content=["'][^"']*?url=['"]?([^"'>]+)""",
+                body, re.IGNORECASE
+            )
+            if meta:
+                return meta.group(1).strip().strip("'\"")
+
+            if 'error?e=' in body:
+                err = re.search(r'error\?e=([^"\'&<]+)', body)
+                detail = err.group(1).replace('+', ' ') if err else 'unknown error'
+                raise Exception(f"MegaDB: the server rejected the download ({detail}).")
+
+        raise Exception(
+            f"MegaDB: the server replied {r.status_code} without a CDN link "
+            "(countdown not completed or missing session cookie)."
+        )
     
     def _resolve_fileditch(self, url: str) -> tuple[str, dict]:
         r = self._get_with_cf(url)
@@ -183,9 +322,19 @@ class LinkResolver:
         return (accept_lang.split(',')[0].strip() or 'en-US')
 
     def _get_gofile_token(self) -> str:
-        """Mint un guest token GoFile e lo riusa per l'intera sessione (rate-limit friendly)."""
+        """Mint a GoFile guest token and reuse the module-level cache.
+
+        Every download builds a new LinkResolver: without a shared cache we
+        minted a guest account per file and hit the per-IP rate limit.
+        """
         if self._gofile_token:
             return self._gofile_token
+
+        now = time.time()
+        if _GOFILE_TOKEN['value'] and now < _GOFILE_TOKEN['expires']:
+            self._gofile_token = _GOFILE_TOKEN['value']
+            return self._gofile_token
+
         token_r = requests.post(
             "https://api.gofile.io/accounts",
             headers=self.base_headers, cookies=self.session_cookies,
@@ -194,77 +343,146 @@ class LinkResolver:
         try:
             token_data = token_r.json()
         except Exception:
-            raise Exception(f"Gofile API Error: impossibile leggere il Token. HTTP {token_r.status_code}")
+            raise Exception(f"Gofile API error: could not read the account token. HTTP {token_r.status_code}")
 
         if token_data.get('status') != 'ok' or not token_data.get('data', {}).get('token'):
-            raise Exception(f"Gofile: impossibile ottenere token guest ({token_data.get('status')})")
+            raise Exception(f"Gofile: could not obtain a guest token ({token_data.get('status')})")
 
         self._gofile_token = token_data['data']['token']
+        _GOFILE_TOKEN['value'] = self._gofile_token
+        _GOFILE_TOKEN['expires'] = now + GOFILE_TOKEN_TTL
         return self._gofile_token
+
+    def _reset_gofile_token(self) -> str:
+        """Drop the current guest token (rate-limited/expired) and mint a new one."""
+        self._gofile_token = None
+        _GOFILE_TOKEN['value'] = None
+        _GOFILE_TOKEN['expires'] = 0.0
+        self.session_cookies.pop('accountToken', None)
+        return self._get_gofile_token()
 
     def _get_gofile_wt(self, account_token: str) -> str:
         return generate_gofile_wt(self.ua, account_token, language=self._gofile_language())
 
+    def _fetch_gofile_contents(self, content_id: str, account_token: str, page: int = 1):
+        """GET /contents/{id} with the wt computed on our own UA/language."""
+        api_url = (
+            f"https://api.gofile.io/contents/{content_id}"
+            f"?page={page}&pageSize=1000&sortField=createTime&sortDirection=-1&maxdepth=16"
+        )
+        api_headers = {
+            **self.base_headers,
+            'Accept': 'application/json, text/plain, */*',
+            'Authorization': f'Bearer {account_token}',
+            'X-Website-Token': self._get_gofile_wt(account_token),
+            'X-BL': self._gofile_language(),
+        }
+        return requests.get(
+            api_url, headers=api_headers,
+            cookies={**self.session_cookies, 'accountToken': account_token},
+            impersonate="chrome120", timeout=20
+        )
+
+    @staticmethod
+    def _iter_gofile_files(node):
+        """Walk the recursive children tree (API maxdepth) and yield file links."""
+        stack = [node]
+        while stack:
+            obj = stack.pop()
+            if not isinstance(obj, dict):
+                continue
+            if obj.get('type') == 'file':
+                link = obj.get('link')
+                if link:
+                    yield link
+                continue
+            for child in (obj.get('children') or {}).values():
+                if isinstance(child, dict):
+                    stack.append(child)
+
+    def _collect_gofile_links(self, content_id: str, token: str, payload: dict) -> list[str]:
+        """File links contained in a /contents response, following pagination."""
+        node = payload.get('data') or {}
+        if node.get('type') == 'file' and node.get('link'):
+            return [node['link']]
+
+        links = list(self._iter_gofile_files(node))
+        meta = payload.get('metadata') or {}
+        page = int(meta.get('page') or 1)
+        while meta.get('hasNextPage') and page < 10:
+            page += 1
+            r = self._fetch_gofile_contents(content_id, token, page=page)
+            try:
+                nxt = r.json()
+            except Exception:
+                break
+            if nxt.get('status') != 'ok':
+                break
+            links.extend(self._iter_gofile_files(nxt.get('data') or {}))
+            meta = nxt.get('metadata') or {}
+        return links
+
     def _resolve_gofile(self, url: str) -> tuple[str, dict]:
         match = re.search(r'gofile\.io/d/([a-zA-Z0-9-]+)', url)
         if not match:
-            raise Exception(f"Gofile: impossibile estrarre content_id da {url}")
+            raise Exception(f"Gofile: could not extract content_id from {url}")
         content_id = match.group(1)
 
         token = self._get_gofile_token()
-        lang = self._gofile_language()
-        api_url = (f"https://api.gofile.io/contents/{content_id}"
-                   f"?page=1&pageSize=100&sortField=createTime&sortDirection=-1")
+        data = None
+        status = None
+        last_http = None
 
-        def _fetch(account_token):
-            wt = self._get_gofile_wt(account_token)
-            api_headers = {
-                **self.base_headers,
-                'Authorization': f'Bearer {account_token}',
-                'X-Website-Token': wt,
-                'X-BL': lang,
-            }
-            return requests.get(
-                api_url, headers=api_headers,
-                cookies={**self.session_cookies, 'accountToken': account_token},
-                impersonate="chrome120", timeout=15
-            )
+        # error-rateLimit comes back with HTTP 200, so it must be handled from
+        # the payload, not only from the status code. A "dirty" guest token is
+        # recovered by minting a new one + backoff.
+        for attempt in range(3):
+            if attempt:
+                time.sleep(1.5 * attempt)
+            api_r = self._fetch_gofile_contents(content_id, token)
+            last_http = api_r.status_code
+            if api_r.status_code == 429:
+                token = self._reset_gofile_token()
+                continue
+            try:
+                data = api_r.json()
+            except Exception:
+                raise Exception(f"Gofile API error: non-JSON response. HTTP {api_r.status_code}")
+            status = data.get('status')
+            if status in ('error-rateLimit', 'error-token', 'error-wrongToken'):
+                print(f"[GoFile] {status}: rinnovo token guest e riprovo...")
+                token = self._reset_gofile_token()
+                continue
+            break
 
-        api_r = _fetch(token)
-        if api_r.status_code == 429:
-            # Rate-limit: il token mintato è orfano. Reset cache e riprova una volta.
-            print("[GoFile] Rate-limit sul token, minting di un nuovo account guest...")
-            self._gofile_token = None
-            token = self._get_gofile_token()
-            api_r = _fetch(token)
-
-        try:
-            data = api_r.json()
-        except Exception:
-            raise Exception(f"Gofile API error: risposta non JSON. HTTP {api_r.status_code}")
-
-        status = data.get('status')
-        data_obj = data.get('data') or {}
+        data_obj = (data or {}).get('data') or {}
 
         if status != 'ok':
-            if status in ('error-token', 'error-wrongToken'):
-                self._gofile_token = None
+            if status == 'error-notFound':
+                raise Exception("GoFile: content not found (link expired or removed from the server).")
+            if status == 'error-rateLimit':
+                raise Exception(
+                    "GoFile: server rate-limit even after refreshing the guest token. "
+                    "Please try again in a few minutes."
+                )
             raise GofileGateError(
-                f"GoFile: accesso negato ({status}). La cartella richiede Premium o password.", url)
+                f"GoFile: access denied ({status or 'HTTP ' + str(last_http)}). "
+                "The folder requires Premium or a password.", url)
 
         if data_obj.get('canAccess') is False:
             raise GofileGateError(
-                "GoFile: accesso negato alla cartella (richiede password o Premium).", url)
+                "GoFile: access to the folder denied (password or Premium required).", url)
 
-        children = data_obj.get('children', {})
-        for child in children.values():
-            if child.get('type') == 'file':
-                link = child.get('link')
-                if link:
-                    self.session_cookies['accountToken'] = token
-                    return link, self.session_cookies
+        links = self._collect_gofile_links(content_id, token, data or {})
 
-        raise Exception("Gofile: nessun file trovato nella cartella")
+        if links:
+            print(f"[GoFile] Link diretto trovato ({len(links)} file).")
+            self.session_cookies['accountToken'] = token
+            return links[0], self.session_cookies
+
+        raise Exception(
+            "Gofile: no files found in the folder (it may be empty or contain only subfolders)."
+        )
 
     def _resolve_buzzheavier(self, url: str) -> tuple[str, dict]:
         page_r = self._get_with_cf(url)
