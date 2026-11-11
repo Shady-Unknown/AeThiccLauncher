@@ -3,7 +3,7 @@ import re
 import tempfile
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QListWidget, QStackedWidget, QVBoxLayout, QPushButton, QWidget, QFormLayout, QLineEdit, QFileDialog, QLabel, QSpinBox, QComboBox, QColorDialog, QCheckBox, QInputDialog, QMessageBox
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QListWidget, QStackedWidget, QVBoxLayout, QPushButton, QWidget, QFormLayout, QLineEdit, QFileDialog, QLabel, QSpinBox, QComboBox, QColorDialog, QCheckBox, QInputDialog, QMessageBox, QSlider
 from core import config as style_settings
 from ui.widgets.api_keys_form import ApiKeysForm
 
@@ -135,7 +135,43 @@ class SettingsDialog(QDialog):
         help_playtime.setWordWrap(True)
         layout.addRow(help_playtime)
 
+        # --- EXPLORER BACKGROUND BLUR ---
+        ui_cfg = self.config.setdefault("ui", {})
+        self.slider_blur = QSlider(Qt.Orientation.Horizontal)
+        self.slider_blur.setRange(0, 100)
+        self.slider_blur.setSingleStep(5)
+        self.slider_blur.setPageStep(10)
+        self.slider_blur.setValue(int(ui_cfg.get("explorer_blur", 0)))
+        self.slider_blur.setToolTip(
+            "0% = sharp background, 100% = very soft (a colored blob)."
+        )
+        self.lbl_blur_value = QLabel(f"{self.slider_blur.value()}%")
+        self.lbl_blur_value.setMinimumWidth(44)
+        self.lbl_blur_value.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        blur_row = QHBoxLayout()
+        blur_row.addWidget(self.slider_blur, 1)
+        blur_row.addWidget(self.lbl_blur_value)
+        layout.addRow("Explorer background blur:", blur_row)
+
+        help_blur = QLabel(
+            "How soft the blurred game art behind the Explorer panels is. "
+            "Changes are previewed live."
+        )
+        help_blur.setWordWrap(True)
+        layout.addRow(help_blur)
+        self.slider_blur.valueChanged.connect(self._on_blur_changed)
+
         self.pages_container.addWidget(page)
+
+    def _on_blur_changed(self, value):
+        self.lbl_blur_value.setText(f"{value}%")
+        self.config.setdefault("ui", {})["explorer_blur"] = int(value)
+        parent = self.parent()
+        tab = getattr(parent, "tab_explorer", None)
+        if tab is not None:
+            tab.set_blur_percent(value)
 
     def browse_temp_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Temporary Folder",
@@ -444,6 +480,8 @@ class SettingsDialog(QDialog):
             self.theme_combo.clear()
             self.theme_combo.addItems(list(self.config["themes"].keys()))
             self.theme_combo.setCurrentText(self.config["current_theme"])
+        if hasattr(self, "slider_blur"):
+            self.slider_blur.setValue(int(self.config.get("ui", {}).get("explorer_blur", 0)))
         if self.parent(): self.parent().apply_current_theme(self.config["theme"])
         self.accept()
 

@@ -331,6 +331,10 @@ class VersionController:
         self._version_panel_open = not self._version_panel_open
         panel.setVisible(self._version_panel_open)
         pill.set_expanded(self._version_panel_open)
+        tab = getattr(self, "tab_explorer", None)
+        if self._version_panel_open and tab is not None:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, tab.ensure_header_space)
 
     def open_version_status_steamdb(self):
         url = self._version_status_steamdb_url

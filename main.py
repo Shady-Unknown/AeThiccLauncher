@@ -59,8 +59,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.config import get_base_dir, load_config
 from core.logging_setup import setup_logging
 from core import data_files
+from core.version import __version__
 
 setup_logging()
+logging.getLogger("startup").info("[STARTUP] Ae Thicc Launcher %s", __version__)
 _phase("imports + logging ready")
 
 from ui.main_window import AppWindow

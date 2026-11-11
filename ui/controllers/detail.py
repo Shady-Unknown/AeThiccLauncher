@@ -574,6 +574,8 @@ class GameDetailController:
 
         # Stampiamo il titolo in alto a sinistra
         self.lbl_game_title.setText(title)
+        if hasattr(self, "tab_explorer"):
+            self.tab_explorer.set_rail_visible(True)
 
         # --- INIZIO FIX COMPORTAMENTO TASTO PLAY MULTI-OS ---
         if is_installed:
@@ -719,6 +721,8 @@ class GameDetailController:
             self.desc_display.setHtml(gold_html + clean_desc)
         else:
             self.desc_display.setHtml(clean_desc)
+        if hasattr(self, "tab_explorer"):
+            self.tab_explorer.refresh_description_height()
         self.info_display.setHtml(data['game_info'])
         self.req_display.setHtml(data['requirements'])
         _perf("html_render")
@@ -741,6 +745,10 @@ class GameDetailController:
                     sale_discount = max(sale_discount, sd.get("discount_percent", 0))
             if sale_platforms:
                 default_banner_text = SaleStyle.sale_cover_banner_text(" & ".join(sale_platforms), sale_discount)
+
+        # --- SFONDO GLASS: featured image SteamRip (fallback: splash screen) ---
+        if hasattr(self, "tab_explorer"):
+            self.tab_explorer.set_game_background(data.get("img_url", ""), title)
 
         # --- FIX: PRENDIAMO GLI URL DIRETTAMENTE DALLO SCRAPER ---
         if data.get('cover_urls'):

@@ -155,26 +155,9 @@ class SettingsController:
         self._applied_theme_key = theme_key
 
         extra_css = f"""
-            QListWidget#LibraryList {{
-                background-color: {theme_data['background_dark_purple']};
-                border: 1px solid {theme_data['main_accent_color']};
-                border-radius: 6px;
-                padding: 5px;
-            }}
-            QListWidget#LibraryList::item {{
-                padding: 2px; 
-                border-bottom: none; 
-                border-radius: 4px;
-            }}
-            QListWidget#LibraryList::item:hover {{ 
-                background-color: {theme_data['surface_panel_purple']}; 
-            }}
-            QListWidget#LibraryList::item:selected {{ 
-                background-color: {theme_data['surface_panel_purple']}; 
-                border-left: 3px solid {theme_data['main_accent_color']};
-                border-radius: 2px;
-            }}
-            
+            /* La lista libreria dell'Explorer è gestita da ExplorerTab
+               (vetro + selezione neon); qui resta solo lo stile degli store. */
+
             /* TASTI STORE DIVENTANO ICONE TRASPARENTI CIRCOLARI */
             QPushButton#BtnSteamStore, QPushButton#BtnGogStore {{
                 background-color: transparent;
@@ -204,6 +187,13 @@ class SettingsController:
             app.setStyleSheet(full_style)
         else:
             self.setStyleSheet(full_style)
+
+        # La tab Explorer ricostruisce la skin vetro dal tema attivo.
+        if hasattr(self, "tab_explorer") and hasattr(self.tab_explorer, "set_theme"):
+            self.tab_explorer.set_theme(theme_data)
+            self.tab_explorer.set_blur_percent(
+                (self.app_config.get("ui", {}) or {}).get("explorer_blur", 0)
+            )
 
         # ---> INIETTA QUESTO CONTROLLO QUI SOTTO <---
         if hasattr(self, 'dl_manager'):

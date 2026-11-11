@@ -73,6 +73,9 @@ DEFAULT_CONFIG = {
         "cinema_rate": 6.0,                   # cost per hour used by the phrase engine
         "library_sort": "installed_first",    # Stats library ordering
         "library_installed_only": False       # Hide non-installed games
+    },
+    "ui": {
+        "explorer_blur": 0,                   # 0..100: sfocatura sfondo Explorer
     }
 }
 

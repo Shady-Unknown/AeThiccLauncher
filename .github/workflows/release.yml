@@ -44,8 +44,8 @@ jobs:
         with:
           name: windows-build
           path: |
-            dist/Ae_Thicc_Launcher_Windows.zip
-            dist/Ae_Thicc_Launcher_Setup.exe
+            dist/Ae_Thicc_Launcher_Windows_*.zip
+            dist/Ae_Thicc_Launcher_Setup_*.exe
           retention-days: 1
   # ==========================================
   # 2. BUILD LINUX (Flatpak su Fedora 38)
@@ -163,6 +163,6 @@ jobs:
           name: "Ae Thicc Launcher v${{ env.VERSION }}"
           body_path: release_notes.md
           files: |
-            Ae_Thicc_Launcher_Windows.zip
-            Ae_Thicc_Launcher_Setup.exe
+            Ae_Thicc_Launcher_Windows_*.zip
+            Ae_Thicc_Launcher_Setup_*.exe
             Ae_Thicc_Launcher_Linux.flatpak

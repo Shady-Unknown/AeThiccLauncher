@@ -265,13 +265,9 @@ class LibraryController:
         if not meta: return
 
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color: #2b1a42; border: 1px solid #733d91; border-radius: 6px; padding: 4px; }
-            QMenu::item { color: #ffffff; padding: 8px 24px; border-radius: 4px; }
-            QMenu::item:selected { background-color: #3b2a52; }
-            QMenu::item:disabled { color: #8a7fa4; background: transparent; padding: 6px 12px; font-size: 11px; }
-            QMenu::separator { height: 1px; background: #3d2a5a; margin: 4px 8px; }
-        """)
+        from ui.widgets.glass import style_context_menu
+
+        style_context_menu(menu, self.app_config.get("theme", {}))
         
         play_action = menu.addAction("▶ Play Game")
 
@@ -473,6 +469,8 @@ class LibraryController:
                 current_html += badge
 
         self.desc_display.setHtml(current_html)
+        if hasattr(self, "tab_explorer"):
+            self.tab_explorer.refresh_description_height()
 
     def _prompt_save_path_fallback(self, raw_title, meta, item):
         from urllib.parse import quote

@@ -2,6 +2,17 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## v1.9.2 — 2026-11-11
+
+### Explorer restyle (glass UI)
+- The Explorer tab has a new look: glass panels over a blurred background built from the game's featured image, with a responsive right rail (cover, quick links, Play).
+- **Background blur** is configurable in Settings (0–100): 0 is already a light blur, higher values blur more.
+- **System Requirements** and **Game Info** are now icon + value grids parsed from the page. When the markup is unexpected, the app falls back to the previous list.
+- Library sidebar: wider, `LIBRARY` and the search box share the same panel, and the status dots are more compact.
+- **Version status** is collapsed by default and expands over the game header.
+- Context menus are restyled to match the glass look; the browser menu on the cover and on scrollbars is disabled.
+- Text contrast over the background adapts to the image luminance, so custom themes stay readable.
+
 ## v1.9.1 — 2026-11-11
 
 ### Fixed

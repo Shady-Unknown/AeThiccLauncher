@@ -196,13 +196,13 @@ class LibraryManager:
             for i in range(4):
                 dot_lbl = QLabel()
                 dot_lbl.setObjectName(f"Indicator{i}")
-                dot_lbl.setFixedWidth(24)
-                dot_lbl.setMinimumHeight(32)
+                dot_lbl.setFixedWidth(18)
+                dot_lbl.setMinimumHeight(28)
                 dot_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-                dot_lbl.setStyleSheet("background: transparent; font-size: 16px;")
+                dot_lbl.setStyleSheet("background: transparent; font-size: 13px;")
                 main_layout.addWidget(dot_lbl)
                 if i < 3:  # Spacing tra pallini (non dopo l'ultimo)
-                    main_layout.addSpacing(2)
+                    main_layout.addSpacing(1)
             
             self.lib_list.setItemWidget(item, widget)
             
@@ -258,7 +258,7 @@ class LibraryManager:
                     dot, color, tooltip = indicators[key]
                     dot_lbl = widget.findChild(QLabel, f"Indicator{idx}")
                     if dot_lbl:
-                        dot_lbl.setText(f"<span style='color:{color}; font-size:16px;'>{dot}</span>")
+                        dot_lbl.setText(f"<span style='color:{color}; font-size:13px;'>{dot}</span>")
                         dot_lbl.setToolTip(tooltip)
         
         # Applicazione finale dei testi (titolo con ellissi + tooltip, sottotitolo)
@@ -270,7 +270,7 @@ class LibraryManager:
         lbl_sub.setText(f"<span style='color:{sub_color}; font-size:10px;'>{sub_text}</span>")
 
         hint = widget.sizeHint()
-        item.setSizeHint(QSize(hint.width(), max(hint.height(), 46)))
+        item.setSizeHint(QSize(hint.width(), max(hint.height(), 42)))
 
     def _get_status_indicators(self, game_title, meta):
         """Ritorna i 4 pallini indicatori (Update, JSON, Save, Steam) per un gioco."""

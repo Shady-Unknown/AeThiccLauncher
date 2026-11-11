@@ -14,7 +14,11 @@
 
 #define AppName "Ae Thicc Launcher"
 #define AppExe "Ae_Thicc_Launcher.exe"
-#define AppVersion "1.9.1"
+; La versione arriva da core/version.py tramite "ISCC /DAppVersion=x.y.z".
+; Il valore qui sotto è solo il fallback per una compilazione manuale.
+#ifndef AppVersion
+  #define AppVersion "1.9.2"
+#endif
 #define AppPublisher "Ae Thicc"
 #define AppId "{{8F3C2B71-9D64-4E0A-B1C5-7A2D9E6F4C13}"
 
@@ -23,7 +27,7 @@ AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-VersionInfoVersion=1.9.1.0
+VersionInfoVersion={#AppVersion}.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName} Setup
 VersionInfoProductName={#AppName}
@@ -33,7 +37,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 OutputDir=dist
-OutputBaseFilename=Ae_Thicc_Launcher_Setup
+OutputBaseFilename=Ae_Thicc_Launcher_Setup_{#AppVersion}
 SetupIconFile=.media\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2

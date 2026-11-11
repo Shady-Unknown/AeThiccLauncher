@@ -161,6 +161,17 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ---
 
+## What's New in Version 1.9.2?
+
+### Explorer restyle (glass UI)
+- New Explorer look: glass panels over a blurred background taken from the game's featured image, with a responsive right rail (cover, quick links, Play).
+- Background blur is adjustable in **Settings** (0–100); 0 is already a light blur.
+- **System Requirements** and **Game Info** are now icon + value grids, with a fallback to the old list when the page markup is unusual.
+- Wider library sidebar (`LIBRARY` + search in one panel), more compact status dots.
+- **Version status** starts collapsed and expands over the header.
+- Glass context menus; the browser menu on the cover and on scrollbars is disabled.
+- Text contrast adapts to the background image, so custom themes stay readable.
+
 ## What's New in Version 1.9.1?
 
 ### Fixed

@@ -111,6 +111,34 @@ class CoverCache:
         return str(page_path)
 
     @staticmethod
+    def _local_path_from_url(url):
+        """file:// URL -> path locale (Windows e POSIX)."""
+        from urllib.parse import unquote, urlparse
+
+        path = unquote(urlparse(url).path)
+        if os.name == "nt" and len(path) > 2 and path[0] == "/" and path[2] == ":":
+            path = path[1:]
+        return path
+
+    @staticmethod
+    def local_path_for(url):
+        """Path locale dell'immagine (scarica e mette in cache se serve).
+
+        Ritorna ``None`` se l'URL è vuoto o il download fallisce, così il
+        chiamante può ricadere su un asset locale (es. splash screen).
+        """
+        if not url:
+            return None
+        if url.startswith("file://"):
+            path = CoverCache._local_path_from_url(url)
+            return path if os.path.isfile(path) else None
+        local = CoverCache._cache_url(url)
+        if not local or not local.startswith("file://"):
+            return None
+        path = CoverCache._local_path_from_url(local)
+        return path if os.path.isfile(path) else None
+
+    @staticmethod
     def _cache_url(url):
         if not url or url.startswith("file://"):
             return url
