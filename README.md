@@ -3,7 +3,7 @@
 
 ## Community
 
-<a href="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/discorda.jpg"><img src="discorda.jpg" width="80" align="left" alt="Ae Thicc Launcher Discord" /></a>
+<a href="https://discord.gg/4WF7YU3ynC"><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/discorda.jpg" width="80" align="left" alt="Ae Thicc Launcher Discord" /></a>
 
 **Join the Ae Thicc Launcher Discord** — get help with setup, report bugs, suggest features, or just hang out and talk games.
 
