@@ -2,6 +2,13 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## v1.9.3 — 2026-11-11
+
+### Fixed
+- **GoFile**: single-file links (`gofile.io/d/<code>`) download again. Folder links now also handle nested subfolders and pagination.
+- **MegaDB**: updated to the new site flow (`megadb.net` with download token). Large files no longer stop with a `curl: (28) Operation timed out` error.
+- **Downloads**: a connection that stalls for about two minutes is now detected and resumed automatically instead of hanging.
+
 ## v1.9.2 — 2026-11-11
 
 ### Explorer restyle (glass UI)

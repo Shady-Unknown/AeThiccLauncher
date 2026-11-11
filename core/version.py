@@ -13,7 +13,7 @@ Bump this value *and* add the matching ``## v<version>`` changelog section in
 the same commit that starts with ``Release_``.
 """
 
-__version__ = "1.9.2"
+__version__ = "1.9.3"
 
 #: Same version as a tuple, handy for comparisons (Windows file versions).
 __version_info__ = tuple(int(part) for part in __version__.split("."))

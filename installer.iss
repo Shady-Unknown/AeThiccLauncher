@@ -17,7 +17,7 @@
 ; La versione arriva da core/version.py tramite "ISCC /DAppVersion=x.y.z".
 ; Il valore qui sotto è solo il fallback per una compilazione manuale.
 #ifndef AppVersion
-  #define AppVersion "1.9.2"
+  #define AppVersion "1.9.3"
 #endif
 #define AppPublisher "Ae Thicc"
 #define AppId "{{8F3C2B71-9D64-4E0A-B1C5-7A2D9E6F4C13}"
