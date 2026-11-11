@@ -161,6 +161,12 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ---
 
+## What's New in Version 1.9.1?
+
+### Fixed
+- Launching a game that is already in Steam now goes **through Steam**, so the Steam overlay, Steam Game Recording and playtime tracking work again. Games that are not in Steam still launch directly.
+- If the stored Steam shortcut ID is missing, it is recovered from Steam instead of starting the game outside of it.
+
 ## What's New in Version 1.9.0?
 
 ### Open source & API keys

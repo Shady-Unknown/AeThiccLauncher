@@ -171,6 +171,59 @@ def is_steam_running():
         return False
 
 
+def launch_shortcut(steam_id):
+    """Chiede a Steam di avviare lo shortcut (``steam://rungameid/<gameid>``).
+
+    Passare da Steam è l'unico modo per avere overlay, registrazione e
+    conteggio ore: il processo del gioco deve essere figlio di Steam.
+    Accetta l'ID a 64 bit salvato in ``steam_shortcut_id``.
+
+    Ritorna True se la richiesta è stata consegnata a Steam.
+    """
+    steam_id = str(steam_id or "").strip()
+    if not steam_id:
+        return False
+    url = f"steam://rungameid/{steam_id}"
+
+    if sys.platform == "win32":
+        # Stessa invocazione registrata da Steam per l'handler steam://:
+        # "steam.exe" -- "steam://...". Avviare Steam direttamente è più
+        # affidabile del semplice ShellExecute.
+        try:
+            subprocess.Popen(
+                [_steam_executable(), "--", url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as exc:
+            print(f"[Steam] steam.exe non avviabile ({exc}), provo l'handler steam://")
+        try:
+            os.startfile(url)
+            return True
+        except OSError as exc:
+            print(f"[Steam] Handler steam:// non disponibile: {exc}")
+            return False
+
+    if platform_info.is_flatpak():
+        cmd = ["flatpak-spawn", "--host", "steam", url]
+    else:
+        cmd = ["steam", url]
+    try:
+        subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as exc:
+        print(f"[Steam] Impossibile avviare Steam: {exc}")
+        return False
+
+
 def get_steam_localconfig_path(account_id):
     """Percorso del localconfig.vdf per un determinato account Steam locale."""
     if account_id:
@@ -644,6 +697,34 @@ def is_game_in_steam(game_title):
             except Exception:
                 pass
     return False
+
+def find_shortcut_in_steam(game_title):
+    """Cerca lo shortcut di ``game_title`` nei file shortcuts.vdf degli account.
+
+    Ritorna ``(shortcut_id_64, grid_id_32)`` oppure ``None``. Serve a
+    ricostruire ``steam_shortcut_id`` quando il metadata è stato ripulito ma
+    lo shortcut esiste ancora in Steam.
+    """
+    for user_dir in get_steam_account_paths():
+        shortcuts_file = os.path.join(user_dir, "config", "shortcuts.vdf")
+        if not os.path.exists(shortcuts_file):
+            continue
+        try:
+            with open(shortcuts_file, 'rb') as f:
+                shortcuts = vdf.binary_loads(f.read())
+        except Exception:
+            continue
+        for entry in (shortcuts.get('shortcuts', {}) or {}).values():
+            if entry.get('AppName', '') != game_title:
+                continue
+            try:
+                grid_id = int(entry.get('appid', 0)) & 0xFFFFFFFF
+            except (TypeError, ValueError):
+                continue
+            shortcut_id = (grid_id << 32) | 0x02000000
+            return str(shortcut_id), str(grid_id)
+    return None
+
 
 def remove_from_steam(game_title, restart_steam=True):
     """

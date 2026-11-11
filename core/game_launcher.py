@@ -32,24 +32,38 @@ class GameLauncher:
         meta = self.app_window.installed_games.get(game_title)
         if not meta or meta.get("is_orphan"): return False
         
-        steam_id = meta.get('steam_shortcut_id')
-        if steam_id and str(steam_id).strip():
-            # Controllo reale nel file shortcuts.vdf di Steam
-            in_steam = steam_integration.is_game_in_steam(game_title)
-            print(f"[Steam Check] '{game_title}' is_game_in_steam={in_steam}")
-            if not in_steam:
-                print(f"[Steam Check] '{game_title}' not found in Steam. Cleaning metadata...")
-                meta['steam_shortcut_id'] = ''
-                meta['steam_grid_id'] = ''
-                if 'linux_wrapper' in meta: meta['linux_wrapper'] = ''
-                
+        steam_id = str(meta.get('steam_shortcut_id') or '').strip()
+        if not steam_id:
+            # Auto-riparazione: lo shortcut può esistere in Steam anche se il
+            # metadata è stato ripulito. Recuperiamo l'ID dal VDF così il
+            # prossimo avvio passa comunque da Steam.
+            recovered = steam_integration.find_shortcut_in_steam(game_title)
+            if recovered:
+                shortcut_id, grid_id = recovered
+                print(f"[Steam Check] '{game_title}' found in Steam, restoring shortcut id {shortcut_id}")
+                meta['steam_shortcut_id'] = shortcut_id
+                if grid_id:
+                    meta['steam_grid_id'] = grid_id
                 self._save_meta(meta)
-                
-                # Aggiorna il pallino nella sidebar
-                item = self._find_item_by_title(game_title)
-                if item:
-                    self._update_library_item(item, game_title, "Installed", meta=meta, game_title=game_title)
                 return True
+            return False
+
+        # Controllo reale nel file shortcuts.vdf di Steam
+        in_steam = steam_integration.is_game_in_steam(game_title)
+        print(f"[Steam Check] '{game_title}' is_game_in_steam={in_steam}")
+        if not in_steam:
+            print(f"[Steam Check] '{game_title}' not found in Steam. Cleaning metadata...")
+            meta['steam_shortcut_id'] = ''
+            meta['steam_grid_id'] = ''
+            if 'linux_wrapper' in meta: meta['linux_wrapper'] = ''
+            
+            self._save_meta(meta)
+            
+            # Aggiorna il pallino nella sidebar
+            item = self._find_item_by_title(game_title)
+            if item:
+                self._update_library_item(item, game_title, "Installed", meta=meta, game_title=game_title)
+            return True
         return False
 
     def launch_game(self, game_title):
@@ -78,7 +92,6 @@ class GameLauncher:
             
             # 3. Flusso STEAM
             if wrapper == 'steam':
-                from core import steam_integration
                 if not steam_id:
                     if not exe_path or not os.path.exists(exe_path):
                         QMessageBox.information(self.app_window, "Executable Selection", f"Select the startup executable (.exe) for {game_title}.\nThis operation needs to be done only once!")
@@ -192,7 +205,18 @@ class GameLauncher:
                 return
             else:
                 return 
-                
+
+        # Se il gioco è già uno shortcut Steam lo avviamo DA Steam: solo così
+        # overlay, registrazione e conteggio delle ore funzionano.
+        steam_id = str(meta.get('steam_shortcut_id') or '').strip()
+        if steam_id and steam_integration.launch_shortcut(steam_id):
+            print(f"[Launch] '{game_title}' avviato via Steam (rungameid {steam_id})")
+            self.app_window.task_label.setText(f"🎮 Running on Steam: {game_title}")
+            self.app_window.task_label.setStyleSheet("color: #00ff88; font-weight: bold; border: none; background: transparent;")
+            # PID sconosciuto: il monitor aggancia il processo dall'exe.
+            self._start_process_monitor(None, meta)
+            return
+
         try:
             work_dir = os.path.dirname(meta['executable_path'])
             proc = subprocess.Popen([meta['executable_path']], cwd=work_dir)
@@ -261,8 +285,6 @@ class GameLauncher:
 
             # RE-INTEGRAZIONE FORZATA STEAM
             if meta['linux_wrapper'] == 'steam':
-                from core import steam_integration
-                
                 # GESTIONE ACCOUNT
                 accounts = steam_integration.get_steam_accounts()
                 if not accounts: return
@@ -355,7 +377,6 @@ class GameLauncher:
             )
             return
             
-        from core import steam_integration
         try:
             accounts = steam_integration.get_steam_accounts()
             if not accounts:

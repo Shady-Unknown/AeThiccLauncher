@@ -2,6 +2,12 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## v1.9.1 — 2026-11-11
+
+### Fixed
+- On Windows, a game that already has a Steam shortcut is now launched **through Steam** (`steam://rungameid/<id>`) instead of starting the executable directly, so the Steam overlay, Steam Game Recording and playtime tracking work again. Games without a Steam shortcut still launch directly.
+- If `steam_shortcut_id` is missing but the shortcut still exists in `shortcuts.vdf`, the launcher now restores the ID from Steam before launching, instead of silently starting the game outside Steam.
+
 ## v1.9.0 — 2026-11-11
 
 ### Open source & API credentials (BYOK)
