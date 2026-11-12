@@ -17,6 +17,15 @@ from PyQt6.QtWidgets import (QMessageBox, QDialog) # QWidget, QVBoxLayout, QHBox
 
 LUDUSAVI_MANIFEST_URL = "https://raw.githubusercontent.com/mtkennerly/ludusavi-manifest/master/data/manifest.yaml"
 
+# Legacy Windows shell folders live inside the Proton prefix under their modern
+# names (Wine maps "My Documents" to "Documents", and so on).
+_LEGACY_SHELL_FOLDERS = {
+    'my documents': 'Documents',
+    'my music': 'Music',
+    'my pictures': 'Pictures',
+    'my videos': 'Videos',
+}
+
 
 def safe_game_folder_name(game_title):
     name = re.sub(r'[\\/*?:"<>|]', '', game_title)
@@ -27,6 +36,7 @@ def safe_game_folder_name(game_title):
 def safe_filename(filename):
     return re.sub(r'[\\/*?:"<>|]', '_', filename)
 from ui.dialogs.manual_save_path_dialog import ManualSavePathDialog
+from core import platform_info
 from core.meta_utils import save_steamrip_meta
 
 class SavegamesManager:
@@ -362,10 +372,15 @@ class SavegamesManager:
             return str(candidate)
 
         # 2. Risoluzione Segmento per Segmento
-        parts = [p for p in clean_path.split('/') if p]
-        
+        drive, rest = os.path.splitdrive(clean_path)
+        parts = [p for p in rest.split('/') if p]
+
+        if drive:
+            # Keep the drive anchor: Path('C:') / 'Users' would collapse the
+            # separator into the invalid "C:Users".
+            current = Path(drive + os.sep)
         # Rispettiamo la radice assoluta su Linux
-        if clean_path.startswith('/'):
+        elif clean_path.startswith('/'):
             current = Path('/')
         else:
             current = Path('')
@@ -408,6 +423,34 @@ class SavegamesManager:
                 return p
         return paths[0]
 
+    @staticmethod
+    def is_linux_path(path):
+        """True when ``path`` can only be meaningful on a POSIX filesystem.
+
+        Saved metadata may hold paths generated on another OS (for example
+        ``C:Users\\me\\.local\\share\\...`` produced by expanding ``~`` on
+        Windows); those must never be treated as a Linux save location.
+        """
+        value = str(path or '').strip().strip('"')
+        if not value:
+            return False
+        return value.startswith('/') or value.startswith('~')
+
+    @staticmethod
+    def _map_legacy_shell_folder(relative_path):
+        """Replace legacy Windows folder aliases with the real prefix folders.
+
+        Inside a Wine/Proton prefix ``C:\\users\\<user>\\My Documents`` is the
+        same folder as ``Documents``, but only the latter is guaranteed to
+        exist, so normalizing it keeps the translated path resolvable.
+        """
+        parts = [p for p in re.split(r'[\\/]+', str(relative_path or '')) if p]
+        if parts:
+            mapped = _LEGACY_SHELL_FOLDERS.get(parts[0].lower())
+            if mapped:
+                parts[0] = mapped
+        return '\\'.join(parts)
+
     def _get_sanitized_linux_path(self, win_path, steam_grid_id, prefix, root_type):
         original = str(win_path).strip().strip('"')
         normalized = original.replace('/', '\\')
@@ -418,13 +461,20 @@ class SavegamesManager:
     def translate_win_path_to_linux(self, win_path, steam_grid_id):
         if not win_path or not steam_grid_id:
             return ""
+        # The compatdata prefix only exists on the machine that runs the game.
+        # On Windows ``~`` expands to C:\Users\<name> and os.path.join emits
+        # backslashes, which used to store garbage such as
+        # "C:Users\me\.local\share\Steam\steamapps\compatdata\...".
+        # Leave the field empty and translate again when running on Linux.
+        if not platform_info.is_linux():
+            return ""
         original = str(win_path).strip().strip('"')
         path = original.replace('/', '\\')
         lower_path = path.lower()
 
         # --- NUOVI BLOCCHI PER I TOKEN DI SISTEMA (Che ci eravamo persi!) ---
         if lower_path.startswith('%userprofile%\\'):
-            rel = path[len('%userprofile%\\'):]
+            rel = self._map_legacy_shell_folder(path[len('%userprofile%\\'):])
             base = os.path.join(self._get_compatdata_base(steam_grid_id), 'pfx/drive_c/users/steamuser')
             return self._resolve_case_insensitive_path(self._resolve_linux_path(base, rel))
             
@@ -451,14 +501,14 @@ class SavegamesManager:
             return self._resolve_case_insensitive_path(self._get_sanitized_linux_path(path, steam_grid_id, '%appdata%\\', 'AppData/Roaming'))
             
         if lower_path.startswith('c:\\users\\steamuser\\'):
-            rel = path[len('c:\\users\\steamuser\\'):]
+            rel = self._map_legacy_shell_folder(path[len('c:\\users\\steamuser\\'):])
             base = os.path.join(self._get_compatdata_base(steam_grid_id), 'pfx/drive_c/users/steamuser')
             return self._resolve_case_insensitive_path(self._resolve_linux_path(base, rel))
             
         if lower_path.startswith('c:\\users\\'):
             parts = path.split('\\')
             if len(parts) > 2:
-                rel = '\\'.join(parts[3:])
+                rel = self._map_legacy_shell_folder('\\'.join(parts[3:]))
                 base = os.path.join(self._get_compatdata_base(steam_grid_id), 'pfx/drive_c/users/steamuser')
                 return self._resolve_case_insensitive_path(self._resolve_linux_path(base, rel))
                 
@@ -587,6 +637,10 @@ class SavegamesManager:
             if linux_path and meta.get('savegame_path_linux') != linux_path:
                 meta['savegame_path_linux'] = linux_path
                 changed = True
+        if meta.get('savegame_path_linux') and not self.is_linux_path(meta['savegame_path_linux']):
+            # Drop values generated on another OS (e.g. a Windows-grown "~" path).
+            meta['savegame_path_linux'] = ""
+            changed = True
         elif not grid_id and 'savegame_path_linux' not in meta:
             meta['savegame_path_linux'] = ""
             changed = True
@@ -633,24 +687,29 @@ class SavegamesManager:
                 path = self._resolve_base_path(path, meta)
                 path = self._expand_path(path)
                 return self._resolve_save_root(path)
-            if meta.get('savegame_path_linux'):
+            if meta.get('savegame_path_linux') and self.is_linux_path(meta['savegame_path_linux']):
                 return self._resolve_save_root(meta['savegame_path_linux'])
         else:
-            if meta.get('savegame_path_linux'):
-                path = self._resolve_linux_path_from_absolute(meta['savegame_path_linux'])
+            stored_linux = meta.get('savegame_path_linux') or ''
+            if stored_linux and self.is_linux_path(stored_linux):
+                path = self._resolve_linux_path_from_absolute(stored_linux)
                 path = self._resolve_case_insensitive_path(path)
                 return self._resolve_save_root(path)
+            # The stored Linux path is missing or was generated on Windows: rebuild
+            # it from the portable Windows path instead of trusting it.
             if meta.get('savegame_path_win') and meta.get('steam_grid_id'):
                 path = self.translate_win_path_to_linux(meta['savegame_path_win'], meta['steam_grid_id'])
-                return self._resolve_save_root(path)
+                if path:
+                    return self._resolve_save_root(path)
             if meta.get('savegame_path_win') and meta.get('savegame_path_win').startswith('%'):
                 path = self.translate_win_path_to_linux(meta['savegame_path_win'], meta.get('steam_grid_id', ''))
-                return self._resolve_save_root(path)
+                if path:
+                    return self._resolve_save_root(path)
             if meta.get('savegame_path_win'):
                 resolved = self._resolve_base_path(meta['savegame_path_win'], meta)
                 if resolved != meta['savegame_path_win']:
                     return self._resolve_save_root(self._resolve_case_insensitive_path(resolved))
-            return self._resolve_case_insensitive_path(meta.get('savegame_path_linux', ''))
+            return ""
 
         return ""
 
@@ -789,6 +848,26 @@ class SavegamesManager:
 
         return {'synced_games': synced_games, 'errors': errors}
 
+    def _persisted_linux_path(self, meta):
+        """Return the stored Linux path only when it is valid on POSIX.
+
+        Prevents a Windows-grown value (``C:Users\\me\\.local\\...``) from being
+        written back into ``savegames.json``.
+        """
+        stored = meta.get('savegame_path_linux', '')
+        return stored if self.is_linux_path(stored) else ''
+
+    def _linux_path_for_meta(self, meta):
+        """Linux path to persist: the stored one when valid, else a fresh translation."""
+        stored = self._persisted_linux_path(meta)
+        if stored:
+            return stored
+        win_path = meta.get('savegame_path_win', '')
+        grid_id = meta.get('steam_grid_id', '')
+        if win_path and grid_id:
+            return self.translate_win_path_to_linux(win_path, grid_id)
+        return ''
+
     def _freshen_json(self, game_root, title, meta, source_path=None, snapshot_folder=None):
         try:
             old = {}
@@ -797,11 +876,9 @@ class SavegamesManager:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     old = json.load(f)
 
-            resolved_linux = meta.get('savegame_path_linux', '')
+            resolved_linux = self._linux_path_for_meta(meta)
             win_path = meta.get('savegame_path_win', '')
             grid_id = meta.get('steam_grid_id', '')
-            if not resolved_linux and win_path and grid_id:
-                resolved_linux = self.translate_win_path_to_linux(win_path, grid_id)
 
             playtime_seconds = int(meta.get('playtime_seconds', 0) or 0)
 
@@ -858,7 +935,7 @@ class SavegamesManager:
                 'snapshot_folder': os.path.relpath(snapshot, game_root).replace('\\', '/'),
                 'steam_grid_id': meta.get('steam_grid_id', ''),
                 'savegame_path_win': meta.get('savegame_path_win', ''),
-                'savegame_path_linux': meta.get('savegame_path_linux', ''),
+                'savegame_path_linux': self._linux_path_for_meta(meta),
                 'savegame_path_custom': meta.get('savegame_path_custom', ''),
                 'playtime_seconds': int(meta.get('playtime_seconds', 0) or 0),
                 'playtime_hours': round(int(meta.get('playtime_seconds', 0) or 0) / 3600.0, 2),
@@ -903,7 +980,7 @@ class SavegamesManager:
                 'steam_grid_id': meta.get('steam_grid_id', ''),
                 'install_dir': meta.get('install_dir', ''),
                 'savegame_path_win': meta.get('savegame_path_win', ''),
-                'savegame_path_linux': meta.get('savegame_path_linux', ''),
+                'savegame_path_linux': self._linux_path_for_meta(meta),
                 'savegame_path_custom': meta.get('savegame_path_custom', ''),
                 'playtime_seconds': playtime_seconds,
                 'playtime_hours': round(playtime_seconds / 3600.0, 2),
