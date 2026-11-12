@@ -1,0 +1,127 @@
+name: Mirror issues to Discord
+
+# GitHub issues -> Discord webhooks (no bot, no external service).
+#
+# Two independent mirrors:
+#   1. every issue / issue comment -> the general issues channel;
+#   2. only the gold-tier proposal issue -> a dedicated channel.
+#
+# Repository configuration (Settings -> Secrets and variables -> Actions):
+#   secret  DISCORD_WEBHOOK_ISSUES  webhook URL of the general issues channel
+#   secret  DISCORD_WEBHOOK_GOLD    webhook URL of the gold proposals channel
+#   var     GOLD_ISSUE_NUMBER       number of the gold proposals issue (e.g. 42);
+#                                   empty disables the second mirror
+#
+# The public workflow files are visible, the webhook URLs are not: they only
+# live in repository secrets.
+
+on:
+  issues:
+    types: [opened, edited, reopened, closed, deleted, labeled, unlabeled, assigned]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+
+# Keep events of the same issue in order so comments are not mirrored out of
+# sequence when several arrive at once.
+concurrency:
+  group: discord-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    # Pull requests also fire `issues` events; they are not mirrored here.
+    if: github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Discord
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          GOLD_ISSUE_NUMBER: ${{ vars.GOLD_ISSUE_NUMBER }}
+          WEBHOOK_ISSUES: ${{ secrets.DISCORD_WEBHOOK_ISSUES }}
+          WEBHOOK_GOLD: ${{ secrets.DISCORD_WEBHOOK_GOLD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          MAX_BODY = 1200
+          COLOR_ISSUES = 0x5865F2  # Discord blurple
+          COLOR_GOLD = 0xE6B800
+
+          payload = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          event = os.environ.get("EVENT_NAME", "")
+          action = os.environ.get("EVENT_ACTION", payload.get("action", ""))
+          issue = payload.get("issue") or {}
+          number = issue.get("number")
+
+          if not number:
+              print("payload has no issue, nothing to do")
+              sys.exit(0)
+
+
+          def snippet(text):
+              text = (text or "").replace("\r\n", "\n").strip()
+              if len(text) > MAX_BODY:
+                  text = text[:MAX_BODY].rstrip() + "…"
+              return text
+
+
+          if event == "issue_comment":
+              comment = payload.get("comment") or {}
+              author = (comment.get("user") or {}).get("login", "unknown")
+              title = f"Issue #{number} · comment {action} by {author}"
+              url = comment.get("html_url") or issue.get("html_url", "")
+              body = snippet(comment.get("body", ""))
+              fields = []
+          else:
+              author = (issue.get("user") or {}).get("login", "unknown")
+              title = f"Issue #{number} {action}: {issue.get('title', '')}"[:250]
+              url = issue.get("html_url", "")
+              body = "" if action == "deleted" else snippet(issue.get("body", ""))
+              labels = ", ".join(label["name"] for label in issue.get("labels", [])) or "—"
+              fields = [
+                  {"name": "State", "value": issue.get("state", "unknown"), "inline": True},
+                  {"name": "Author", "value": author, "inline": True},
+                  {"name": "Labels", "value": labels[:1000], "inline": False},
+              ]
+
+
+          def post(webhook, color, channel):
+              if not webhook:
+                  print(f"{channel}: no webhook configured, skipping")
+                  return
+              embed = {"title": title, "url": url, "color": color, "fields": fields}
+              if body:
+                  embed["description"] = body
+              request = urllib.request.Request(
+                  webhook,
+                  data=json.dumps(
+                      {
+                          "username": "Ae Thicc Issues",
+                          "allowed_mentions": {"parse": []},
+                          "embeds": [embed],
+                      }
+                  ).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=15) as response:
+                      print(f"{channel}: posted ({response.status})")
+              except Exception as exc:  # noqa: BLE001 - never break issue activity
+                  print(f"::warning::{channel}: post failed ({exc})")
+
+
+          post(os.environ.get("WEBHOOK_ISSUES", ""), COLOR_ISSUES, "issues")
+
+          gold = os.environ.get("GOLD_ISSUE_NUMBER", "").strip()
+          if gold.isdigit() and int(gold) == int(number):
+              post(os.environ.get("WEBHOOK_GOLD", ""), COLOR_GOLD, "gold")
+          elif gold:
+              print(f"issue #{number} is not the gold issue (#{gold}), skipping gold")
+          PY
