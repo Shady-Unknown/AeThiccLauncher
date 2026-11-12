@@ -46,6 +46,7 @@ jobs:
           import json
           import os
           import sys
+          import urllib.error
           import urllib.request
 
           MAX_BODY = 1200
@@ -108,11 +109,21 @@ jobs:
                       "embeds": [embed],
                   }
               ).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Content-Type": "application/json",
+                  # Discord rejects generic clients such as "Python-urllib/x.y"
+                  # with 403, so always send a dedicated User-Agent.
+                  "User-Agent": "AeThiccGoldMirror/1.0 (GitHub Actions)",
+              },
           )
           try:
               with urllib.request.urlopen(request, timeout=15) as response:
                   print(f"posted ({response.status})")
+          except urllib.error.HTTPError as exc:
+              # Discord explains the reason in the body (code 10015 unknown
+              # webhook, 50013 missing permissions, ...): surface it.
+              detail = exc.read().decode("utf-8", "replace")[:400]
+              print(f"::warning::post failed ({exc.code}): {detail}")
           except Exception as exc:  # noqa: BLE001 - never break issue activity
               print(f"::warning::post failed ({exc})")
           PY
