@@ -1,4 +1,4 @@
-﻿# Script di compilazione per Ae Thicc Launcher su Windows 11
+# Script di compilazione per Ae Thicc Launcher su Windows 11
 $ErrorActionPreference = "Stop"
 $ExeName = "Ae_Thicc_Launcher"
 
@@ -17,6 +17,24 @@ if (-not $VenvPath) {
 }
 $Python = Join-Path $VenvPath "Scripts\python.exe"
 
+# Versione applicazione: unica fonte in core/version.py
+$Version = (& $Python -c "from core.version import __version__; print(__version__)" 2>$null | Select-Object -First 1)
+if ($Version) { $Version = $Version.Trim() }
+if (-not $Version -or $Version -notmatch '^\d+\.\d+\.\d+$') {
+    Write-Host "ERRORE: impossibile leggere la versione da core\version.py (valore: '$Version')" -ForegroundColor Red
+    exit 1
+}
+Write-Host "Versione applicazione: $Version" -ForegroundColor Cyan
+
+$ChangelogHasVersion = Test-Path "CHANGELOG.md" -PathType Leaf
+if ($ChangelogHasVersion) {
+    $ChangelogHasVersion = Select-String -Path "CHANGELOG.md" -Pattern "^## v$([regex]::Escape($Version))\b" -Quiet
+}
+if (-not $ChangelogHasVersion) {
+    Write-Host "ATTENZIONE: CHANGELOG.md non ha una sezione '## v$Version'." -ForegroundColor Yellow
+    Write-Host "   Le note di release useranno il testo di fallback 'Release $Version'." -ForegroundColor Gray
+}
+
 Write-Host "Verifica dipendenze..." -ForegroundColor Gray
 & $Python -m pip install -r requirements.txt --quiet
 & $Python -m pip install pyinstaller --quiet
@@ -27,8 +45,8 @@ if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
 if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
 if (Test-Path "$ExeName.spec") { Remove-Item -Force "$ExeName.spec" }
 
-# 2. Esecuzione PyInstaller â€” onedir: niente estrazione del bundle a ogni avvio,
-#    avvio molto piÃ¹ rapido e meno falsi positivi degli antivirus.
+# 2. Esecuzione PyInstaller — onedir: niente estrazione del bundle a ogni avvio,
+#    avvio molto più rapido e meno falsi positivi degli antivirus.
 Write-Host "Generazione eseguibile in corso (Onedir, No Console)..." -ForegroundColor Yellow
 & $Python -m PyInstaller --noconsole --onedir --clean --name $ExeName `
     --icon=".media\icon.ico" `
@@ -66,12 +84,12 @@ foreach ($file in $Files) {
 
 $DistExe = Join-Path $DistDir "$ExeName.exe"
 if (-not (Test-Path $DistExe)) {
-    Write-Host "ERRORE: L'eseguibile non Ã¨ stato generato. Controlla i log di PyInstaller sopra." -ForegroundColor Red
+    Write-Host "ERRORE: L'eseguibile non è stato generato. Controlla i log di PyInstaller sopra." -ForegroundColor Red
     exit
 }
 
 # 4. Zip portatile (contenuto alla radice: exe, _internal, asset)
-$ZipPath = Join-Path (Resolve-Path ".").Path "${DistRoot}\${ExeName}_Windows.zip"
+$ZipPath = Join-Path (Resolve-Path ".").Path "${DistRoot}\${ExeName}_Windows_${Version}.zip"
 $SevenZip = Join-Path (Resolve-Path ".").Path "bin\Windows\x64\7z.exe"
 Write-Host "Creazione pacchetto portatile..." -ForegroundColor Yellow
 if (Test-Path $SevenZip) {
@@ -124,11 +142,11 @@ $IsccPath = Find-Iscc
 if ($IsccPath) {
     if (Test-Path "installer.iss") {
         Write-Host "Compilazione installer Inno Setup ($IsccPath)..." -ForegroundColor Yellow
-        & $IsccPath "installer.iss"
+        & $IsccPath "/DAppVersion=$Version" "installer.iss"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERRORE: Inno Setup ha restituito codice $LASTEXITCODE" -ForegroundColor Red
         }
-        $Setup = Join-Path $DistRoot "${ExeName}_Setup.exe"
+        $Setup = Join-Path $DistRoot "${ExeName}_Setup_${Version}.exe"
         if (Test-Path $Setup) {
             Write-Host "   -> $Setup" -ForegroundColor Gray
         } else {
@@ -144,8 +162,7 @@ if ($IsccPath) {
 Write-Host "Build completata con successo!" -ForegroundColor Green
 Write-Host "   Cartella: $DistDir" -ForegroundColor Green
 Write-Host "   Zip:      $ZipPath" -ForegroundColor Green
-$SetupPath = Join-Path $DistRoot "${ExeName}_Setup.exe"
+$SetupPath = Join-Path $DistRoot "${ExeName}_Setup_${Version}.exe"
 if (Test-Path $SetupPath) {
     Write-Host "   Setup:    $SetupPath" -ForegroundColor Green
 }
-
