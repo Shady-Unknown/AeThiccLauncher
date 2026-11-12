@@ -111,10 +111,9 @@ class InstallerFlowCoordinator(QObject):
 
         if not dest_folder:
             self.app_window.is_task_running = False
-            self.app_window.task_label.setText("Idle: Ready for action")
-            self.app_window.task_label.setStyleSheet("color: white; font-weight: bold; border: none; background: transparent;")
+            self.app_window.task_label.setText("Extraction postponed - archive kept in cache")
+            self.app_window.task_label.setStyleSheet("color: #ffcc00; font-weight: bold; border: none; background: transparent;")
             self.app_window.task_progress.hide()
-            QMessageBox.information(self.app_window, "Postponed", f"File saved in cache:\n{temp_archive_path}")
             if hasattr(self.app_window, 'dl_manager'):
                 self.app_window.dl_manager.add_pending_extraction(temp_archive_path, task_data or {})
                 self.app_window.dl_manager.finish_extraction()
@@ -169,15 +168,19 @@ class InstallerFlowCoordinator(QObject):
                 preserve_meta = False
             else:
                 self.app_window.is_task_running = False
-                self.app_window.task_label.setText("Idle: Ready for action")
+                self.app_window.task_label.setText("Extraction postponed - archive kept in cache")
                 self.app_window.task_label.setStyleSheet("color: white; font-weight: bold; border: none; background: transparent;")
                 self.app_window.task_progress.hide()
-                QMessageBox.information(self.app_window, "Postponed", f"File saved in cache:\n{temp_archive_path}")
                 if hasattr(self.app_window, 'dl_manager'):
                     self.app_window.dl_manager.finish_extraction()
                 return
 
         self._current_preserve_meta = preserve_meta
+
+        if hasattr(self.app_window, 'dl_manager'):
+            self.app_window.dl_manager.set_extraction_install_dir(
+                temp_archive_path, target_final_path
+            )
 
         # Setup UI per l'estrazione
         self.app_window.lbl_game_title.setText("Installation in progress...")

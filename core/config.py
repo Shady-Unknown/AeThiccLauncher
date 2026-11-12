@@ -20,6 +20,11 @@ DEFAULT_PURPLE_RIP_THEME = {
     "status_green": "#00ff88",   # Verde neon per i download attivi
     "status_yellow": "#ffcc00",  # Giallo per la pausa
     "status_red": "#ff00a0",     # Rosso/Magenta per gli errori
+    # Semantic colors for the downloads queue (never hard-coded in widgets).
+    "queue_state_ready": "#00ff88",
+    "queue_state_partial": "#ffcc00",
+    "queue_state_interrupted": "#ff00a0",
+    "queue_state_queued": "#8a7fa4",
     "text_muted": "#8a7fa4",     # Grigio/Lilla per i testi secondari (Info, Space)
 }
 
@@ -38,6 +43,11 @@ DEFAULT_ORANGE_CYBER_THEME = {
     "status_green": "#23b100",
     "status_yellow": "#ffcc00",
     "status_red": "#9d0003",
+    # Semantic colors for the downloads queue (never hard-coded in widgets).
+    "queue_state_ready": "#23b100",
+    "queue_state_partial": "#ffcc00",
+    "queue_state_interrupted": "#ff2d55",
+    "queue_state_queued": "#a46d00",
     "text_muted": "#a46d00"
 }
 

@@ -69,6 +69,33 @@ class ArchiveUtilsTests(unittest.TestCase):
         archive_utils.clear_incomplete(self.archive)
         self.assertFalse(archive_utils.is_marked_incomplete(self.archive))
 
+    def test_incomplete_marker_persists_metadata(self):
+        archive_utils.mark_incomplete(
+            self.archive,
+            "truncated",
+            meta={
+                "title": "Game",
+                "provider": "GoFile",
+                "url": "https://gofile.io/d/abc",
+                "total_bytes": 100,
+            },
+        )
+        meta = archive_utils.read_incomplete_meta(self.archive)
+        self.assertEqual(meta["reason"], "truncated")
+        self.assertEqual(meta["title"], "Game")
+        self.assertEqual(meta["provider"], "GoFile")
+        self.assertEqual(meta["url"], "https://gofile.io/d/abc")
+        self.assertEqual(meta["total_bytes"], 100)
+
+    def test_legacy_text_marker_is_still_readable(self):
+        with open(archive_utils.incomplete_marker(self.archive), "w",
+                  encoding="utf-8") as handle:
+            handle.write("truncated")
+        self.assertEqual(
+            archive_utils.read_incomplete_meta(self.archive),
+            {"reason": "truncated"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

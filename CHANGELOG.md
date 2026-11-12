@@ -2,6 +2,15 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## Unreleased
+
+### Downloads
+- Incomplete downloads and pending extractions no longer open a popup at startup. They are listed in the Downloads tab with their state color, provider and progress.
+- The active (or, when idle, the next) item is always pinned on top, followed by the optional **Needs Extraction** and **Up Next** sections.
+- Every row has a play button to start, resume or extract it; the header play button starts the active/next item.
+- An interrupted extraction is kept as a queue row with its percentage, and dismissing an archive is now persistent (the orphan scan no longer brings it back).
+- Queue header shortcuts to open the temporary folder or remove unused cached files. The queue state is stored in a hidden file so it is not edited by accident.
+
 ## v1.9.3 — 2026-11-11
 
 ### Fixed

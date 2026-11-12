@@ -25,5 +25,5 @@
    <stop stop-color="#6ec8fa" offset="1" stop-opacity="1"/>
   </radialGradient>
  </defs>
-<circle id="shape0" transform="translate(15.1199990330638, 15.8399989870192)" r="168.839989202546" cx="168.839989202546" cy="168.839989202546" fill="none" stroke="url(#gradient0)" stroke-width="28.8" stroke-linecap="square" stroke-linejoin="bevel"/><path id="shape01" transform="translate(91.799999908581, 115.2)" fill="url(#gradient1)" fill-rule="evenodd" stroke="url(#gradient2)" stroke-width="1.44" stroke-linecap="square" stroke-linejoin="bevel" d="M0 72C30.6 57.6 81.6 33.6 153 0C153 48 153 96 153 144C81.6 110.4 30.6 86.4 0 72" sodipodi:nodetypes="cccc"/>
+<circle id="shape0" transform="translate(15.1199990330638, 15.8399989870192)" r="168.839989202546" cx="168.839989202546" cy="168.839989202546" fill="none" stroke="url(#gradient0)" stroke-width="28.8" stroke-linecap="square" stroke-linejoin="bevel"/><path id="shape01" transform="translate(91.799999908581, 115.2)" fill="url(#gradient1)" fill-rule="evenodd" stroke="url(#gradient2)" stroke-width="1.44" stroke-linecap="square" stroke-linejoin="bevel" d="M0 0C0 48 0 96 0 144C81.6 110.4 132.6 86.4 153 72C132.6 57.6 81.6 33.6 0 0" sodipodi:nodetypes="cccc"/>
 </svg>

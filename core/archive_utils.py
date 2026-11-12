@@ -1,6 +1,7 @@
 """Archive helpers shared by the downloader and the recovery flow."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -35,15 +36,46 @@ def is_marked_incomplete(path):
     return bool(path) and os.path.isfile(incomplete_marker(path))
 
 
-def mark_incomplete(path, reason=""):
-    """Remember that ``path`` is truncated, so we do not re-check it."""
+def mark_incomplete(path, reason="", meta=None):
+    """Remember that ``path`` is truncated, so we do not re-check it.
+
+    The marker is a small JSON sidecar so a partial file can keep its title,
+    provider and URL even when the download state is lost. Legacy markers were
+    plain text and are still readable through :func:`read_incomplete_meta`.
+    """
     if not path:
         return
+    payload = {"reason": str(reason or "incomplete")}
+    if isinstance(meta, dict):
+        for key, value in meta.items():
+            if value not in (None, "", [], {}):
+                payload[key] = value
     try:
         with open(incomplete_marker(path), "w", encoding="utf-8") as handle:
-            handle.write(str(reason or "incomplete"))
+            json.dump(payload, handle, ensure_ascii=False)
     except OSError:
         pass
+
+
+def read_incomplete_meta(path):
+    """Read the marker written by :func:`mark_incomplete` (legacy text included)."""
+    if not path:
+        return {}
+    marker = incomplete_marker(path)
+    if not os.path.isfile(marker):
+        return {}
+    try:
+        with open(marker, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return {}
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return {"reason": text.strip()}
+    if isinstance(data, dict):
+        return data
+    return {"reason": text.strip()}
 
 
 def clear_incomplete(path):

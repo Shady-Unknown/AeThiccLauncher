@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.config import get_base_dir
+from core.download_queue_model import clear_extraction_state, write_extraction_state
 from core.meta_utils import EXTRACTING_MARKER, save_steamrip_meta
 
 # Chiavi di metadati da conservare quando aggiorniamo un'installazione esistente
@@ -107,10 +108,22 @@ class GameInstaller(QThread):
             except OSError:
                 pass
 
+            # Sidecar used by the downloads queue to show "extraction
+            # interrupted at x%" after a crash or a cancel.
+            write_extraction_state(self.archive_path, {
+                "archive_path": self.archive_path,
+                "install_dir": final_game_path,
+                "title": (self.game_data or {}).get("title", ""),
+                "page_url": (self.game_data or {}).get("page_url", ""),
+                "started_at": time.time(),
+                "pct": 0,
+            })
+
             cmd = [seven_z_bin, "x", self.archive_path, f"-o{final_game_path}", "-y", "-bsp1", pass_arg]
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, cwd=final_game_path)
 
             last_emit = time.time()
+            last_state_write = time.time()
             mb_extracted = 0.0
 
             buffer = ""
@@ -137,6 +150,16 @@ class GameInstaller(QThread):
                             if now - last_emit > 0.1:
                                 self.extraction_progress.emit(pct, mb_extracted)
                                 last_emit = now
+                            if now - last_state_write > 5:
+                                write_extraction_state(self.archive_path, {
+                                    "archive_path": self.archive_path,
+                                    "install_dir": final_game_path,
+                                    "title": (self.game_data or {}).get("title", ""),
+                                    "page_url": (self.game_data or {}).get("page_url", ""),
+                                    "updated_at": now,
+                                    "pct": pct,
+                                })
+                                last_state_write = now
                         buffer = ""
                 else:
                     buffer += char
@@ -160,6 +183,7 @@ class GameInstaller(QThread):
                 os.remove(marker_path)
             except OSError:
                 pass
+            clear_extraction_state(self.archive_path)
             os.remove(self.archive_path)
             self.installation_complete.emit(final_game_path)
 

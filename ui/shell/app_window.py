@@ -418,7 +418,8 @@ class AppWindow(
 
         # Instantiation
         self.dl_manager = DownloadManagerTab(self.app_config['theme'])
-        self.dl_manager.set_state_file(os.path.join(self.temp_folder, "dl_state.json"))
+        self.dl_manager.temp_folder = self.temp_folder
+        self.dl_manager.set_state_file(os.path.join(self.temp_folder, ".dl_state.json"))
         
         from ui.tabs.explorer_tab import ExplorerTab
         self.widgets = WindowWidgets()
@@ -450,8 +451,12 @@ class AppWindow(
         self.dl_manager.gate_fallback_requested.connect(self._trigger_gate_fallback)
         self.dl_manager.resume_detected.connect(self._on_download_resumed)
         self.dl_manager.extraction_cancel_requested.connect(self._cancel_extraction)
+        self.dl_manager.pending_extraction_ready.connect(self._on_pending_extraction_ready)
+        self.dl_manager.open_game_page_requested.connect(self._open_incomplete_in_explorer)
+        self.dl_manager.attention_changed.connect(self._update_downloads_attention)
         self.scraper.cf_bypassed.connect(self._on_cf_bypassed)
         self.dl_manager.pause_state_changed.connect(self._sync_global_pause_state)
+        self._update_downloads_attention(self.dl_manager.attention_count())
 
         # Recovery pending extraction al primo idle
         QTimer.singleShot(1500, self._recover_pending_extractions)

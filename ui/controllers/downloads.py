@@ -44,6 +44,10 @@ from core import config as style_settings
 from core.config import get_base_dir
 from core.mini_cover_cache import MiniCoverManager
 from core.download_utils import normalize_dest_path
+from core.download_queue_model import (
+    clear_extraction_state,
+    read_extraction_state,
+)
 from core.meta_utils import EXTRACTING_MARKER, STEAMRIP_META_FILENAME
 from core.archive_utils import (
     clear_incomplete,
@@ -51,10 +55,10 @@ from core.archive_utils import (
     is_archive_path,
     is_marked_incomplete,
     mark_incomplete,
+    read_incomplete_meta,
 )
 
 from ui.dialogs.orphan_dialog import OrphanDialog
-from ui.dialogs.incomplete_download_dialog import IncompleteDownloadDialog
 #from ui.dialogs.linux_wrapper_dialog import LinuxWrapperDialog
 #from ui.widgets.profile_card import ProfileCard
 #from ui.dialogs.steam_account_dialog import SteamAccountDialog
@@ -145,16 +149,265 @@ class DownloadsController:
             if callable(start_search):
                 start_search()
 
-    def _show_incomplete_downloads(self, entries):
-        if not entries:
+    def _incomplete_meta(self, task, path):
+        task = task or {}
+        meta = {
+            "title": task.get("title", ""),
+            "provider": task.get("provider", ""),
+            "provider_domain": task.get("provider_domain", ""),
+            "url": task.get("url", ""),
+            "page_url": task.get("page_url", ""),
+            "cover_url": task.get("cover_url", ""),
+            "web_version": task.get("web_version", ""),
+            "total_bytes": task.get("total_bytes", 0),
+        }
+        try:
+            meta["downloaded_bytes"] = os.path.getsize(path) if path else 0
+        except OSError:
+            meta["downloaded_bytes"] = 0
+        return {key: value for key, value in meta.items() if value not in (None, "", 0)}
+
+    def _catalog_url_for_title(self, title):
+        """Best-effort game page lookup for a partial with no saved URL."""
+        catalog = getattr(self, "master_catalog", None)
+        if not catalog or not title:
+            return ""
+        cleaned = self._explorer_search_text({"title": title})
+        for candidate in (title, cleaned):
+            if not candidate:
+                continue
+            try:
+                url = catalog.get_url(candidate)
+            except Exception:
+                url = ""
+            if url:
+                return url
+        needle = cleaned.lower()
+        if needle:
+            try:
+                for key in catalog.keys():
+                    if needle in str(key).lower():
+                        url = catalog.get_url(key)
+                        if url:
+                            return url
+            except Exception:
+                pass
+        return ""
+
+    def _add_recovered_partial(self, archive_path, entry, meta):
+        if not archive_path or not os.path.exists(archive_path):
             return
-        dialog = IncompleteDownloadDialog(
-            entries,
-            self.app_config.get("theme", {}),
-            self._open_incomplete_in_explorer,
-            self,
+        key = normalize_dest_path(archive_path)
+        tasks = []
+        current = getattr(self.dl_manager, "current_task", None)
+        if isinstance(current, dict):
+            tasks.append(current)
+        tasks.extend(
+            task for task in (getattr(self.dl_manager, "queue", []) or [])
+            if isinstance(task, dict)
         )
-        dialog.exec()
+        if any(normalize_dest_path(task.get("dest_path")) == key for task in tasks):
+            return
+
+        meta = meta or {}
+        entry = entry or {}
+        try:
+            size = os.path.getsize(archive_path)
+        except OSError:
+            size = 0
+        title = meta.get("title") or entry.get("title") or os.path.basename(archive_path)
+        page_url = meta.get("page_url") or entry.get("page_url", "")
+        if not page_url:
+            page_url = self._catalog_url_for_title(title)
+        task = {
+            "url": meta.get("url") or entry.get("url", ""),
+            "filename": os.path.basename(archive_path),
+            "dest_path": archive_path,
+            "title": title,
+            "provider": meta.get("provider") or entry.get("provider", ""),
+            "provider_domain": meta.get("provider_domain") or entry.get("provider_domain", ""),
+            "page_url": page_url,
+            "cover_url": meta.get("cover_url") or entry.get("cover_url", ""),
+            "web_version": meta.get("web_version") or entry.get("web_version", ""),
+            "game_info": entry.get("game_info", ""),
+            "description": entry.get("description", ""),
+            "phase": "partial",
+            "downloaded_bytes": size,
+            "total_bytes": int(meta.get("total_bytes") or 0),
+            "created_at": time.time(),
+        }
+        print(f"[App] Recovered partial download: {task['title']} ({size} bytes)")
+        self.dl_manager.add_to_queue(task, auto_start=False)
+
+    def _on_pending_extraction_ready(self, archive_path, task_data):
+        if not archive_path:
+            return
+        self.is_task_running = True
+        self.task_label.setText("📦 Preparing extraction...")
+        self.task_label.setStyleSheet(
+            "color: #ffcc00; font-weight: bold; border: none; background: transparent;"
+        )
+        self.installer_flow.prompt_installation(archive_path, task_data=task_data)
+
+    def _update_downloads_attention(self, count):
+        tabs = getattr(self, "tabs", None)
+        manager = getattr(self, "dl_manager", None)
+        if tabs is None or manager is None:
+            return
+        index = tabs.indexOf(manager)
+        if index < 0:
+            return
+        count = max(0, int(count or 0))
+        suffix = f" ({count})" if count else ""
+        tabs.setTabText(index, f"⬇️ Downloads{suffix}")
+        tabs.setTabToolTip(
+            index,
+            f"{count} item(s) need attention" if count else "Downloads",
+        )
+
+    def _recover_pending_extractions(self):
+        """Populate the queue with partial downloads and pending extractions.
+
+        This used to open modal dialogs at startup. Rows now live in the
+        Downloads tab (badge + in-tab banner), so the user decides when to act.
+        """
+        if self.is_task_running:
+            return
+
+        valid = self.dl_manager.recover_pending_extractions()
+
+        active_tasks = []
+        current_task = getattr(self.dl_manager, "current_task", None)
+        if isinstance(current_task, dict):
+            active_tasks.append(current_task)
+        active_tasks.extend(
+            task for task in (getattr(self.dl_manager, "queue", []) or [])
+            if isinstance(task, dict)
+        )
+        active_paths = {
+            normalize_dest_path(task.get("dest_path"))
+            for task in active_tasks if task.get("dest_path")
+        }
+        dismissed = {
+            str(item) for item in (getattr(self.dl_manager, "dismissed_archives", []) or [])
+        }
+
+        incomplete_entries = []
+        remaining = []
+        handled_paths = set()
+        for entry in valid:
+            archive_path = str(entry.get("archive_path", ""))
+            title = entry.get("title", "")
+            key = normalize_dest_path(archive_path)
+            handled_paths.add(key)
+            if key in active_paths:
+                print(f"[App] Skip pending extraction: '{title}' is still downloading")
+                self.dl_manager.remove_pending_extraction(archive_path)
+                continue
+            if self._archive_matches_installed(archive_path, title):
+                print(f"[App] Skip pending extraction: '{title}' is already installed")
+                self.dl_manager.remove_pending_extraction(archive_path)
+                continue
+            if key in dismissed:
+                self.dl_manager.remove_pending_extraction(archive_path)
+                continue
+
+            meta = read_incomplete_meta(archive_path)
+            if is_marked_incomplete(archive_path) or not is_archive_complete(archive_path):
+                if not is_marked_incomplete(archive_path):
+                    mark_incomplete(
+                        archive_path,
+                        "truncated",
+                        meta=self._incomplete_meta(entry, archive_path),
+                    )
+                incomplete_entries.append((entry, meta))
+                self.dl_manager.remove_pending_extraction(archive_path)
+                continue
+            remaining.append(entry)
+
+        # Orphan scan: files dropped in the temp folder without state.
+        known = {
+            normalize_dest_path(entry.get("archive_path"))
+            for entry in remaining if entry.get("archive_path")
+        }
+        if os.path.isdir(self.temp_folder):
+            for fname in sorted(os.listdir(self.temp_folder)):
+                if not fname.lower().endswith((".zip", ".7z", ".rar")):
+                    continue
+                fpath = os.path.join(self.temp_folder, fname)
+                key = normalize_dest_path(fpath)
+                if key in known or key in active_paths or key in dismissed or key in handled_paths:
+                    continue
+                try:
+                    if os.path.getsize(fpath) < 100 * 1024 * 1024:
+                        continue
+                except OSError:
+                    continue
+                title_guess = fname.rsplit(".", 1)[0].replace("_", " ")
+                if self._archive_matches_installed(fpath, title_guess):
+                    continue
+                meta = read_incomplete_meta(fpath)
+                if is_marked_incomplete(fpath) or not is_archive_complete(fpath):
+                    if not is_marked_incomplete(fpath):
+                        mark_incomplete(fpath, "truncated", meta=meta)
+                    incomplete_entries.append(({"archive_path": fpath}, meta))
+                    continue
+                remaining.append({
+                    "archive_path": fpath,
+                    "title": title_guess,
+                    "web_version": "",
+                    "game_info": "",
+                    "description": "",
+                    "page_url": "",
+                    "cover_url": "",
+                    "provider": "",
+                    "provider_domain": "",
+                })
+
+        # Extraction sidecars: an extraction that was interrupted.
+        if os.path.isdir(self.temp_folder):
+            for fname in sorted(os.listdir(self.temp_folder)):
+                if not fname.endswith(".extracting.json"):
+                    continue
+                sidecar_path = os.path.join(self.temp_folder, fname)
+                data = read_extraction_state(sidecar_path)
+                archive_path = str(data.get("archive_path") or "")
+                if not archive_path or not os.path.exists(archive_path):
+                    clear_extraction_state(archive_path or sidecar_path.replace(
+                        ".extracting.json", ""
+                    ))
+                    continue
+                key = normalize_dest_path(archive_path)
+                entry = next(
+                    (e for e in remaining
+                     if normalize_dest_path(e.get("archive_path")) == key),
+                    None,
+                )
+                if entry is None:
+                    entry = {
+                        "archive_path": archive_path,
+                        "title": data.get("title", "") or os.path.basename(archive_path),
+                        "web_version": "",
+                        "game_info": "",
+                        "description": "",
+                        "page_url": "",
+                        "cover_url": "",
+                        "provider": "",
+                        "provider_domain": "",
+                    }
+                    remaining.append(entry)
+                entry["state"] = "interrupted"
+                entry["pct"] = int(data.get("pct") or entry.get("pct") or 0)
+                entry["install_dir"] = data.get("install_dir", entry.get("install_dir", ""))
+
+        for entry, meta in incomplete_entries:
+            self._add_recovered_partial(entry.get("archive_path"), entry, meta)
+
+        self.dl_manager.set_pending_extractions(remaining)
+        print(
+            f"[App] Download recovery: {len(remaining)} pending extraction(s), "
+            f"{len(incomplete_entries)} partial download(s)"
+        )
 
     def _on_cf_bypassed(self, html, _):
         """Scudo terminato! Riassegna il colore verde del download e invia i cookie freschi al worker dormiente."""
@@ -408,16 +661,20 @@ class DownloadsController:
         else:
             if is_archive_path(final_path) and not is_archive_complete(final_path):
                 # Last line of defence: never offer a truncated archive for
-                # extraction. Keep the file so the download can resume.
-                mark_incomplete(final_path, "truncated")
-                self.task_label.setText("❌ Incomplete download")
-                self.task_label.setStyleSheet("color: #ff00a0; font-weight: bold; border: none; background: transparent;")
-                entry = dict(current_task or {})
-                entry["archive_path"] = final_path
-                self._show_incomplete_downloads([entry])
+                # extraction. Keep the file (and its row) so it can resume.
+                mark_incomplete(
+                    final_path,
+                    "truncated",
+                    meta=self._incomplete_meta(current_task, final_path),
+                )
+                self.task_label.setText("⚠️ Incomplete download kept for resume")
+                self.task_label.setStyleSheet("color: #ffcc00; font-weight: bold; border: none; background: transparent;")
+                self.dl_manager.mark_current_partial(final_path)
                 return
             clear_incomplete(final_path)
             self.task_label.setText("✅ Download Complete! Preparing extraction...")
+            if current_task:
+                self.dl_manager.prepare_extraction(final_path, current_task)
             self.installer_flow.prompt_installation(final_path, task_data=current_task)
 
     def _sync_dl_error(self, err_msg):
@@ -480,166 +737,6 @@ class DownloadsController:
                 return True
         return False
 
-    def _recover_pending_extractions(self):
-        """All'avvio: cerca archivi completati ma non estratti e propone estrazione."""
-        if self.is_task_running:
-            return
-
-        # 1. Recovery delle entry esplicite in pending_extractions
-        valid = self.dl_manager.recover_pending_extractions()
-
-        active_tasks = []
-        current_task = getattr(self.dl_manager, "current_task", None)
-        if isinstance(current_task, dict):
-            active_tasks.append(current_task)
-        active_tasks.extend(
-            task for task in (getattr(self.dl_manager, "queue", []) or [])
-            if isinstance(task, dict)
-        )
-        active_paths = {
-            normalize_dest_path(task.get("dest_path"))
-            for task in active_tasks if task.get("dest_path")
-        }
-
-        installed_entries = []
-        incomplete_entries = []
-        remaining = []
-        for entry in valid:
-            archive_path = entry.get("archive_path", "")
-            title = entry.get("title", "")
-            if normalize_dest_path(archive_path) in active_paths:
-                print(
-                    f"[App] Skip pending extraction: '{title}' is still in "
-                    "the download queue"
-                )
-                self.dl_manager.remove_pending_extraction(archive_path)
-                continue
-            if self._archive_matches_installed(archive_path, title):
-                installed_entries.append(entry)
-                continue
-            if is_marked_incomplete(archive_path):
-                self.dl_manager.remove_pending_extraction(archive_path)
-                continue
-            if not is_archive_complete(archive_path):
-                print(
-                    f"[App] Incomplete download: '{title}' ({archive_path}) "
-                    "cannot be extracted"
-                )
-                mark_incomplete(archive_path, "truncated")
-                incomplete_entries.append(entry)
-                self.dl_manager.remove_pending_extraction(archive_path)
-                continue
-            remaining.append(entry)
-
-        for entry in installed_entries:
-            archive_path = entry.get("archive_path", "")
-            print(
-                f"[App] Skip pending extraction: '{entry.get('title', '')}' "
-                "is already installed"
-            )
-            self.dl_manager.remove_pending_extraction(archive_path)
-        valid = remaining
-
-        # 2. Scan della temp folder per archivi orfani (>100 MB)
-        # Never treat the active download or queued downloads as orphans: they
-        # are partial files that the downloader will resume.
-        known = {
-            normalize_dest_path(e.get("archive_path"))
-            for e in valid if e.get("archive_path")
-        }
-        if os.path.isdir(self.temp_folder):
-            for fname in os.listdir(self.temp_folder):
-                if not fname.lower().endswith(('.zip', '.7z', '.rar')):
-                    continue
-                fpath = os.path.join(self.temp_folder, fname)
-                key = normalize_dest_path(fpath)
-                if key in known or key in active_paths:
-                    continue
-                try:
-                    if os.path.getsize(fpath) < 100 * 1024 * 1024:
-                        continue
-                except OSError:
-                    continue
-                # Archivio orfano trovato — aggiungilo alla lista
-                title_guess = fname.rsplit('.', 1)[0].replace('_', ' ')
-                if self._archive_matches_installed(fpath, title_guess):
-                    print(
-                        f"[App] Skip pending extraction: '{fname}' is already "
-                        "extracted in an installed game folder"
-                    )
-                    continue
-                if is_marked_incomplete(fpath):
-                    continue
-                if not is_archive_complete(fpath):
-                    print(
-                        f"[App] Incomplete download: '{fname}' is truncated "
-                        "and will not be offered for extraction"
-                    )
-                    mark_incomplete(fpath, "truncated")
-                    incomplete_entries.append({
-                        "archive_path": fpath,
-                        "title": title_guess,
-                    })
-                    continue
-                valid.append({
-                    "archive_path": fpath,
-                    "title": title_guess,
-                    "web_version": "",
-                    "game_info": "",
-                    "description": "",
-                    "page_url": "",
-                    "cover_url": "",
-                    "provider": "",
-                    "provider_domain": "",
-                })
-
-        if incomplete_entries:
-            names = ", ".join(
-                entry.get('title') or os.path.basename(entry.get('archive_path', ''))
-                for entry in incomplete_entries
-            )
-            print(f"[App] Incomplete downloads skipped: {names}")
-            self._show_incomplete_downloads(incomplete_entries)
-
-        if not valid:
-            return
-
-        print(f"[App] Trovati {len(valid)} download da estrarre")
-        entry = valid[0]
-        archive_path = entry.get("archive_path", "")
-        if not os.path.exists(archive_path):
-            self.dl_manager.remove_pending_extraction(archive_path)
-            return
-        title = entry.get("title", "Unknown")
-        provider = entry.get("provider") or entry.get("provider_domain") or ""
-        provider_line = f"Provider used: {provider}\n\n" if provider else ""
-        task_data = {
-            "title": title,
-            "web_version": entry.get("web_version", ""),
-            "game_info": entry.get("game_info", ""),
-            "description": entry.get("description", ""),
-            "page_url": entry.get("page_url", ""),
-            "cover_url": entry.get("cover_url", ""),
-            "provider": entry.get("provider", ""),
-            "provider_domain": entry.get("provider_domain", ""),
-        }
-        reply = QMessageBox.question(
-            self, "Pending Extraction",
-            f"'{title}' has been downloaded but not yet extracted.\n\n"
-            f"{provider_line}"
-            f"Archive: {archive_path}\n\n"
-            "Would you like to extract it now?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.is_task_running = True
-            self.task_label.setText("📦 Extracting pending download...")
-            self.task_label.setStyleSheet("color: #ffcc00; font-weight: bold; border: none; background: transparent;")
-            self.installer_flow.prompt_installation(archive_path, task_data=task_data)
-        else:
-            self.dl_manager.remove_pending_extraction(archive_path)
-
     def toggle_dl_pause(self):
         # Questo bottone ora agisce solo come un telecomando verso il vero motore in dl_manager
         if self.dl_manager.current_task:
@@ -657,13 +754,21 @@ class DownloadsController:
 
     def _sync_global_pause_state(self, is_paused):
         # Quando dl_manager cambia stato (sia internamente che via telecomando), aggiorna l'UI Globale
+        task = getattr(self.dl_manager, "current_task", None)
+        name = ""
+        if isinstance(task, dict):
+            name = str(task.get("filename") or task.get("title") or "")
         if is_paused:
             self.btn_pause_dl.setIcon(self.icon_play)
-            self.task_label.setText(f"⏸️ Paused: {self.dl_manager.current_task['filename']}")
+            self.task_label.setText(
+                f"⏸️ Paused: {name}" if name else "⏸️ Download paused"
+            )
             self.task_label.setStyleSheet("color: #ffcc00; font-weight: bold; border: none; background: transparent;")
         else:
             self.btn_pause_dl.setIcon(self.icon_pause)
-            self.task_label.setText(f"⬇️ Downloading: {self.dl_manager.current_task['filename']}")
+            self.task_label.setText(
+                f"⬇️ Downloading: {name}" if name else "⬇️ Downloading..."
+            )
             self.task_label.setStyleSheet("color: #00ff88; font-weight: bold; border: none; background: transparent;")
         self.btn_pause_dl.clearFocus()
 
