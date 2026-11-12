@@ -161,6 +161,25 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ---
 
+## What's New in Version 1.9.4?
+
+### Discovery
+- In the game sheet, a title already in your library now shows **Play**, **Set Executable** or **Add to Steam** instead of **Install**, using the same Windows and Linux/Flatpak flows as the Explorer rail.
+- Playtime sits next to the action buttons; the sheet grows only when the optional **Add to Steam** row is needed.
+- On Linux/Flatpak, **Add to Steam** automatically asks for the wrapper and the executable when they are missing.
+
+### Downloads
+- Incomplete downloads and pending extractions are listed in the Downloads tab with state, provider and progress instead of opening popups at startup.
+- The active item stays pinned on top; every row can start, resume or extract, and an interrupted extraction remains recoverable.
+- Dismissing an archive is persistent, and the queue header links to the temporary folder and cache cleanup. The queue state is stored in a hidden file.
+
+## What's New in Version 1.9.3?
+
+### Fixed
+- **GoFile** single-file links download again; folder links also handle nested subfolders and pagination.
+- **MegaDB** updated to the new site flow (`megadb.net` download token), so large files no longer stop with a `curl: (28) Operation timed out` error.
+- **Downloads**: a connection that stalls for about two minutes is now detected and resumed automatically.
+
 ## What's New in Version 1.9.2?
 
 ### Explorer restyle (glass UI)
@@ -177,48 +196,5 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 ### Fixed
 - Launching a game that is already in Steam now goes **through Steam**, so the Steam overlay, Steam Game Recording and playtime tracking work again. Games that are not in Steam still launch directly.
 - If the stored Steam shortcut ID is missing, it is recovered from Steam instead of starting the game outside of it.
-
-## What's New in Version 1.9.0?
-
-### Open source & API keys
-- The launcher is now **open source** and ships **no API keys**.
-- SteamGridDB and IGDB are **BYOK**: configure them in the first-run wizard or **Settings → API Keys**, with Test/Remove and Skip.
-- Credentials live in the OS keychain (or an encrypted fallback file), never in `config.json` or logs.
-- The app works without keys: IGDB rows are hidden with a one-time banner and SteamGridDB cover lookups are skipped.
-
-### Setup & data
-- New first-run wizard: configurable data/cache root, one or more **Game Libraries**, default library, temp and savegames folders.
-- Defaults: data/cache in `%LOCALAPPDATA%\AeThiccLauncher`, game library in `C:\SteamRip` (Windows) / `~/SteamRip` (Linux).
-- Windows build uses PyInstaller **onedir** + **Inno Setup** installer; support folders are hidden and data is seeded into the chosen data root at first start.
-- "Watched Folders" is now presented as **Game Libraries**; the install dialog preselects the default library, shows free space and can create a new library on another drive.
-
-### Performance & reliability
-- Startup no longer blocks on the Gold Tier network check; heavy work runs after the window is visible.
-- Theme changes are coalesced (no more repeated full re-themes).
-- Background network failures show a dismissible banner instead of a misleading task error.
-- README documents the Malwarebytes website block on `steamrip.com` (website reputation, not a file detection).
-
-## What's New in Version 1.8.0?
-
-### Stats
-- New **Stats** tab with real local data: hero metrics, tracked/imported hours, streaks, value per hour and library value.
-- Interactive per-game browser, covers, selected-game chart and a rotating advice banner backed by a phrase engine.
-- Separate **Charts** view: 52-week heatmap, hours by time of day and weekday, session-length histogram, genre donut, top developers and best value-per-hour ranking.
-- Range and region selectors; honest empty states when there is no history yet.
-
-### Achievements
-- New top-level **Achievements** tab with 40 data-driven launcher achievements.
-- Click a card for a full-window dimmed overlay with the large glowing icon, status/date and progress; close with Esc or a click outside.
-- Completed achievements move above locked ones; fixed-size cards keep the grid aligned.
-- Retroactive unlocks, toast notifications and state persisted in `achievements.json`.
-- No reset button: unlocks and progress are not exposed to accidental loss.
-
-### Downloads & Steam
-- Download queue deduplicated by archive path, with the provider shown in each row.
-- Re-adding the same game refreshes the existing task; changing provider with a partial file is handled safely.
-- Truncated/incomplete archives are detected before extraction and kept resumable.
-- Pending extraction no longer prompts for games that are already extracted and installed.
-- New **Library → Add All to Steam Library** action, with a correct Windows `steam.exe` shutdown/restart cycle.
-- Steam batch shortcuts now report when Steam could not be restarted automatically.
 
 ---

@@ -2,7 +2,10 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
-## Unreleased
+## v1.9.4 — 2026-11-12
+
+### Discovery
+- The game sheet's **Install** button turns into **Play** / **Set Executable** / **Add to Steam** when the game is already in the library, using the same Windows and Linux/Flatpak flows as the Explorer rail. The playtime is shown next to the actions, the sheet grows only for the optional Add to Steam row, and the original Install handoff stays available for games that are not installed yet.
 
 ### Downloads
 - Incomplete downloads and pending extractions no longer open a popup at startup. They are listed in the Downloads tab with their state color, provider and progress.

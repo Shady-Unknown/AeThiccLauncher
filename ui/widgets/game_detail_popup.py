@@ -7,6 +7,7 @@ risolto all'apertura ma riprodotto solo su richiesta.
 import html as html_lib
 import os
 import re
+import sys
 import time
 from urllib.parse import quote
 
@@ -27,6 +28,7 @@ from core.events import EVENT_TRAILER_WATCHED
 from core.mini_cover_cache import MiniCoverManager
 from core.paths import PathManager
 from managers.igdb_details_cache import IgdbDetailsCache
+from managers.playtime_manager import PlaytimeManager
 from managers.save_manager import safe_game_folder_name
 from network.igdb_details_worker import IGDBDetailsWorker
 from network.trailer_downloader import TrailerDownloadWorker, cached_path
@@ -38,6 +40,9 @@ COVER_H = 450
 PANEL_RATIO = 0.6
 PANEL_MIN_W = 900
 PANEL_MIN_H = 560
+# The optional Add to Steam button adds a second footer row: the panel needs
+# extra height or the fixed-size cover overlaps the footer.
+PANEL_MIN_H_ADD_STEAM = 630
 FADE_MS = 180
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -115,6 +120,7 @@ class GameDetailPopup(QWidget):
         self._extract_retries = 0
         self._extract_timer = None
         self._extract_pending = False
+        self._action_mode = "install"
 
         self.setObjectName("GameDetailOverlay")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -295,18 +301,48 @@ class GameDetailPopup(QWidget):
         )
         footer.addWidget(self._status_label, 1)
 
+        # Playtime uses the horizontal footer space so it never adds a row.
+        self._playtime_label = QLabel("")
+        self._playtime_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._playtime_label.setStyleSheet(
+            "color: rgba(255, 255, 255, 0.62); font-size: 12px;"
+            " font-weight: bold; background: transparent;"
+        )
+        self._playtime_label.hide()
+
         self._play_btn = QPushButton("▶  Play trailer")
         self._play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._play_btn.setEnabled(False)
         self._play_btn.setStyleSheet(self._btn_style(primary=False))
         self._play_btn.clicked.connect(self._toggle_trailer)
-        footer.addWidget(self._play_btn)
+        footer.addWidget(self._play_btn, 0, Qt.AlignmentFlag.AlignTop)
 
-        self._install_btn = QPushButton("Install (Open in Games Explorer)")
-        self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._install_btn.setStyleSheet(self._btn_style(primary=True))
-        self._install_btn.clicked.connect(self._on_install)
-        footer.addWidget(self._install_btn)
+        # Kept next to the main action: it separates the trailer from Play
+        # without spending vertical space.
+        footer.addWidget(self._playtime_label, 0)
+
+        actions = QVBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(4)
+
+        # Same primary style as the old Install button: the in-library actions
+        # (Play / Set Executable / Add to Steam) must look homogeneous.
+        self._action_btn = QPushButton("Install (Open in Games Explorer)")
+        self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._action_btn.setStyleSheet(self._btn_style(primary=True))
+        self._action_btn.clicked.connect(self._on_action_clicked)
+        actions.addWidget(self._action_btn)
+
+        self._steam_btn = QPushButton("➕ Add to Steam (Optional)")
+        self._steam_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._steam_btn.setStyleSheet(self._sub_btn_style())
+        self._steam_btn.clicked.connect(self._on_add_to_steam)
+        self._steam_btn.hide()
+        actions.addWidget(self._steam_btn)
+
+        footer.addLayout(actions)
 
         self._trailer_progress = QProgressBar(self._panel)
         self._trailer_progress.setFixedHeight(3)
@@ -345,6 +381,17 @@ class GameDetailPopup(QWidget):
             f" background: rgba(255, 255, 255, 10); border-color: transparent; }}"
         )
 
+    def _sub_btn_style(self):
+        """Discreet dashed style for the optional Add to Steam action."""
+        return (
+            f"QPushButton {{ background: transparent; color: {self._muted};"
+            f" border: 1px dashed {self._muted}; border-radius: 6px;"
+            f" padding: 4px 12px; font-size: 11px; font-weight: normal; }}"
+            f"QPushButton:hover {{ color: {self._text};"
+            f" border: 1px solid {self._text};"
+            f" background: rgba(255, 255, 255, 20); }}"
+        )
+
     # ── geometry / fade ──────────────────────────────────────────────
 
     def _cover_window(self):
@@ -366,7 +413,11 @@ class GameDetailPopup(QWidget):
             )
             return
         pw = max(PANEL_MIN_W, int(w * PANEL_RATIO))
-        ph = max(PANEL_MIN_H, int(h * PANEL_RATIO))
+        min_h = PANEL_MIN_H
+        steam_btn = getattr(self, "_steam_btn", None)
+        if steam_btn is not None and not steam_btn.isHidden():
+            min_h = PANEL_MIN_H_ADD_STEAM
+        ph = max(min_h, int(h * PANEL_RATIO))
         pw = min(pw, w - 40)
         ph = min(ph, h - 40)
         panel.setGeometry((w - pw) // 2, (h - ph) // 2, pw, ph)
@@ -430,6 +481,7 @@ class GameDetailPopup(QWidget):
         self._cover.clear()
 
         self._apply_local_data()
+        self._refresh_action_state()
         self._cover_window()
         self.show()
         self.raise_()
@@ -1272,6 +1324,64 @@ class GameDetailPopup(QWidget):
         QTimer.singleShot(3000, lambda: setattr(self, "_falling_back", False))
 
     # ── actions ──────────────────────────────────────────────────────
+
+    def _installed_meta(self):
+        games = getattr(self.mw, "installed_games", {}) or {}
+        meta = games.get(self._title)
+        return meta if isinstance(meta, dict) else {}
+
+    def _refresh_action_state(self):
+        """Mirror the Explorer rail: Install, or Play/Set Executable/Add to Steam."""
+        meta = self._installed_meta()
+        if not meta:
+            self._action_mode = "install"
+            self._action_btn.setText("Install (Open in Games Explorer)")
+            self._action_btn.setStyleSheet(self._btn_style(primary=True))
+            self._steam_btn.hide()
+            self._playtime_label.hide()
+            return
+
+        steam_id = str(meta.get("steam_shortcut_id") or "").strip()
+        # On Linux, adding to Steam is the mandatory path (Proton wrapper):
+        # the executable picker lives inside that flow, so no sub-button.
+        self._steam_btn.setVisible(sys.platform != "linux" and not steam_id)
+
+        if sys.platform == "linux":
+            self._action_mode = "play" if steam_id else "add_steam"
+            self._action_btn.setText("➕  ADD TO STEAM" if not steam_id else "▶  PLAY")
+        else:
+            exe_path = str(meta.get("executable_path") or "").strip()
+            self._action_mode = "play" if exe_path else "set_executable"
+            self._action_btn.setText("▶  PLAY" if exe_path else "⚙  SET EXECUTABLE")
+
+        cfg = getattr(self.mw, "app_config", {}) or {}
+        mode = (cfg.get("playtime") or {}).get("display", "hours")
+        seconds = int(meta.get("playtime_seconds", 0) or 0)
+        self._playtime_label.setText(
+            f"⏱ {PlaytimeManager.format_playtime(seconds, mode)}"
+        )
+        self._playtime_label.show()
+
+    def _on_action_clicked(self):
+        if self._action_mode == "install":
+            self._on_install()
+            return
+        was_play = self._action_mode == "play"
+        self.mw.game_launcher.launch_game(self._title)
+        if was_play:
+            self.close_popup()
+            return
+        # Set Executable / Add to Steam may have changed the metadata: keep the
+        # popup in sync instead of forcing the user to reopen it.
+        self._refresh_action_state()
+        self._cover_window()
+
+    def _on_add_to_steam(self):
+        if not self._installed_meta():
+            return
+        self.mw.game_launcher._add_windows_game_to_steam_optional(self._title)
+        self._refresh_action_state()
+        self._cover_window()
 
     def _on_install(self):
         url = self._url or self._title

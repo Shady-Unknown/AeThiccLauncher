@@ -27,6 +27,17 @@ class GameLauncher:
     def _find_item_by_title(self, *args, **kwargs):
         return self.app_window.lib_manager._find_item_by_title(*args, **kwargs)
 
+    def _refresh_explorer_current(self, title):
+        """Re-render the Explorer sheet only when it shows ``title``.
+
+        Play / Set Executable can now start from the Discovery popup too:
+        blindly re-rendering ``current_game_data`` would paint an unrelated
+        (or empty) game in the hidden Explorer tab.
+        """
+        current = getattr(self.app_window, "current_game_data", None) or {}
+        if str(current.get("title") or "") == str(title or ""):
+            self.app_window.display_game_data(current)
+
     def verify_steam_integrity(self, game_title):
         """Verifica se un gioco con ID Steam è ancora presente nella libreria Steam reale."""
         meta = self.app_window.installed_games.get(game_title)
@@ -148,7 +159,7 @@ class GameLauncher:
                         item = self._find_item_by_title(game_title)
                         if item:
                             self._update_library_item(item, game_title, "Installed", meta=meta, game_title=game_title)
-                        self.app_window.display_game_data(self.app_window.current_game_data)
+                        self._refresh_explorer_current(game_title)
                             
                         msg = "Integration completed!\n\n"
                         if restart_steam:
@@ -201,7 +212,7 @@ class GameLauncher:
                 meta['executable_path'] = file_path
                 self._save_meta(meta)
                 self.app_window.installed_games[game_title] = meta
-                self.app_window.display_game_data(self.app_window.current_game_data)
+                self._refresh_explorer_current(game_title)
                 return
             else:
                 return 
@@ -328,7 +339,7 @@ class GameLauncher:
                     item = self._find_item_by_title(game_title)
                     if item:
                         self._update_library_item(item, game_title, "Installed", meta=meta, game_title=game_title)
-                    self.app_window.display_game_data(self.app_window.current_game_data)
+                    self._refresh_explorer_current(game_title)
 
                     msg = "Re-integration completed!\n\n"
                     if restart_steam:
@@ -453,7 +464,7 @@ class GameLauncher:
                         self.app_window.bg_scanner._process_next_bg_check()
 
                     # Rinfresca istantaneamente la tab per nascondere il bottone opzionale appena completato
-                    self.app_window.display_game_data(self.app_window.current_game_data)
+                    self._refresh_explorer_current(title)
                 else:
                     QMessageBox.critical(self.app_window, "Error", "Failed to write shortcut into Steam's shortcuts.vdf file.")
                     
