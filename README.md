@@ -14,25 +14,23 @@ It runs on Windows and Linux (including Steam Deck and Flatpak), keeps its data 
 
 <br clear="both" />
 
-<a id="contents"></a>
 ## Contents
 
 - [About](#about)
 - [Community](#community)
-- [Installation](#install)
-  - [Windows](#install-windows)
-  - [Linux / Flatpak](#install-linux)
-  - [Data and library locations](#paths)
-- [Key features](#features)
+- [Installation](#installation)
+  - [Windows](#windows)
+  - [Linux / Flatpak](#linux--flatpak)
+  - [Data and library locations](#data-and-library-locations)
+- [Key features](#key-features)
 - [Screenshots](#screenshots)
 - [Getting started](#getting-started)
-- [Optional API keys (SteamGridDB / IGDB)](#api-keys)
-- [ffmpeg on Linux](#ffmpeg)
-- [Technical notes for power users](#technical-notes)
+- [Optional API keys (SteamGridDB / IGDB)](#optional-api-keys-steamgriddb--igdb)
+- [ffmpeg on Linux](#ffmpeg-on-linux-trailer-seeking)
+- [Technical notes for power users](#technical-notes-for-power-users)
 - [Upcoming](#upcoming)
 - [Changelog](#changelog)
 
-<a id="about"></a>
 ## About
 
 This launcher doesn't just have an aesthetic; it has a **purpose**.
@@ -45,7 +43,6 @@ However, this freedom comes with a strong moral compass. We believe in voting wi
 
 While many of our ethical features are still actively being developed behind the scenes, everything we build aims to strike this balance: do what you want with YOUR software, but always remember to reward the non-toxic, passionate developers who make this industry great.
 
-<a id="community"></a>
 ## Community
 
 <a href="https://discord.gg/4WF7YU3ynC"><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/discorda.jpg" width="80" align="left" alt="Ae Thicc Launcher Discord" /></a>
@@ -56,12 +53,10 @@ While many of our ethical features are still actively being developed behind the
 
 <br clear="both" />
 
-<a id="install"></a>
 ## Installation
 
 Grab the latest release from the [releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases/latest).
 
-<a id="install-windows"></a>
 ### Windows
 
 _Run the `Ae_Thicc_Launcher_Setup.exe` installer (or use the portable zip) and launch the app. The installer puts the application in the standard Programs folder (`C:\Program Files\AeThiccLauncher`) and asks for the usual UAC elevation; it does not install anything in AppData._
@@ -70,7 +65,6 @@ _Runtime data/cache stays in `%LOCALAPPDATA%\AeThiccLauncher` (the historical lo
 
 _If Windows SmartScreen or your antivirus flags the launcher, allow `Ae_Thicc_Launcher.exe`. Malwarebytes in particular may block `steamrip.com` as a website (not as a file): add an exception for the launcher and for `steamrip.com` if you want Discovery to load._
 
-<a id="install-linux"></a>
 ### Linux / Flatpak
 
 ```bash
@@ -79,7 +73,6 @@ flatpak install --user Ae_Thicc_Launcher_Linux.flatpak
 
 Trailers play out of the box; for smooth seeking inside the sandbox, see [ffmpeg on Linux](#ffmpeg).
 
-<a id="paths"></a>
 ### Data and library locations
 
 Defaults:
@@ -95,10 +88,8 @@ On first run the wizard asks for:
 
 You can change them later from **Settings → Run setup wizard**. A bootstrap file `aethicc.paths.json` records a data root only when you move it away from the default; if the install folder is read-only (for example `/app` inside Flatpak, or `Program Files` on Windows) it is written to the user data directory instead. Existing data in the old location is offered as an optional copy — nothing is deleted.
 
-<a id="features"></a>
 ## Key features
 
-<a id="features-discovery"></a>
 ### Discovery
 
 *   **Doomscroll the catalog:** a single-row horizontal scroller that never ends. Pick a category, keep scrolling, find the game you'll install at 3 AM.
@@ -110,7 +101,6 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Install in one click:** the *Install* button opens the game in the Games Explorer with its download links ready.
 *   **Built-in trailer player:** fullscreen, volume, mute and smooth seeking; trailers are cached locally, so repeat views start instantly.
 
-<a id="features-explorer"></a>
 ### Smart Explorer & Downloader
 
 *   **Integrated Catalog:** Instantly search through the entire SteamRIP database with a lightning-fast auto-completing search bar.
@@ -120,7 +110,6 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Incomplete-download guard:** truncated archives are detected before extraction, kept resumable, and never offered as if they were complete.
 *   **Auto-Extraction & Installation:** Games are downloaded, automatically extracted, and neatly placed into your designated "Game Libraries".
 
-<a id="features-stats"></a>
 ### Stats & Achievements
 
 *   **Stats overview:** real local data for hours, sessions, streaks, Entertainment Yield (hours played per dollar of reference price), library value, developers, publishers and genres.
@@ -130,7 +119,6 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Achievement popup:** full-window dimmed overlay with the large icon, status/date and progress; close with Esc or a click outside the card.
 *   **No progress fuss:** unlocks are idempotent, progress is recalculated from real library data, and there is no destructive reset button in the UI.
 
-<a id="features-library"></a>
 ### Advanced Library Management
 
 *   **Orphan Recovery:** Found an old folder? The launcher can automatically scan it, fetch the correct metadata from the web, and populate it into your library.
@@ -139,7 +127,6 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Steam Sales Mirror:** You got that game in your library. It's SO GOOD! And the devs? You heard great about them. We'll let you know when that piece of art is for sale on **STEAM** and/or **GOG** (nope, F* off Epic)
 *   **Gold Tier:** Games from known Software Houses, verified by the community, in which you can rely forever. Non Toxic, Non Predatory, Quality made games that deserves a spotlight
 
-<a id="features-savegames"></a>
 ### Savegames Manager
 
 *   **Ludusavi Integration:** Automatically fetches game informations to locate exactly where your game saves are stored, both for Windows and Linux (Proton) prefixes.
@@ -149,7 +136,6 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Mirror:** copies the backups incrementally to a second folder (another drive, a network share, a Syncthing/Drive folder) and never deletes anything.
 *   **Launcher data backup:** achievements, stats and preferences are backed up too, and restores are additive (local data wins).
 
-<a id="features-steam"></a>
 ### Steam Integration & Linux/Deck Support
 
 *   **One-Click Steam Injection:** Add your non-Steam games directly into your Steam Library with a single click.
@@ -157,7 +143,6 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Automated Artwork:** The launcher downloads and applies Covers, Heroes, and Logos to your Steam Library entries dynamically!
 *   **Proton Ready:** On Linux/Steam Deck, the launcher automatically configures Steam shortcuts to use `Proton GE` or `Proton Experimental`, getting you ready to play immediately.
 
-<a id="screenshots"></a>
 ## Screenshots
 
 A quick tour of the launcher. Click a shot to open it full size.
@@ -181,14 +166,12 @@ A quick tour of the launcher. Click a shot to open it full size.
   </tr>
 </table>
 
-<a id="getting-started"></a>
 ## Getting started
 
 1.  **First-run wizard:** choose the data/cache folder and at least one **Game Library** (e.g. `C:\Games`, `L:\AeThiccLibrary` or `/home/deck/Games`). The launcher scans libraries for installed games and uses the default one for new downloads/extractions. You can re-run the wizard from **Settings → Run setup wizard**.
 2.  **Configure Save Sync Folder:** In the settings, designate a folder where your savegame backups will be stored (default no forced designation, it has a default path OS based)
 3.  **Search & Play:** Go to the Explorer tab, type a game name or paste a VALID URL (wink wink), hit Enter, and let the launcher do the heavy lifting!
 
-<a id="api-keys"></a>
 ## Optional API keys (SteamGridDB / IGDB)
 
 The launcher works without any API key. If you want the extra metadata:
@@ -198,7 +181,6 @@ The launcher works without any API key. If you want the extra metadata:
 
 Keys are stored in the OS keychain (Windows Credential Manager / Secret Service on Linux); if the keychain is unavailable, the launcher falls back to a protected file in its data folder. Keys are never written to `config.json` and never logged. Changes in Settings are applied after a restart.
 
-<a id="ffmpeg"></a>
 ## ffmpeg on Linux (trailer seeking)
 
 Trailers play out of the box. To also get smooth seeking on Linux, install `ffmpeg` with your distribution's package manager:
@@ -216,7 +198,6 @@ On **Windows** nothing is needed: the launcher bundles what it requires.
 
 In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `ffmpeg` is available there, otherwise the trailer streams normally without seeking.
 
-<a id="technical-notes"></a>
 ## Technical notes for power users
 
 *   **Metadata:** Game metadata is stored locally inside each game's folder in a `steamrip_meta.json` file. You can back up your games just by moving the folder; the launcher will recognize them instantly on the next scan.
@@ -226,12 +207,10 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 *   **Network Drops:** The smart downloader supports resume functionality. If your connection drops, it will automatically attempt to resume up to 10 times. Results may vary depending on hosts.
 *   **Trailers:** the first time a trailer is opened it is prepared in a local cache so seeking is instant and repeat views start immediately. On Windows the needed tool is bundled; on Linux install `ffmpeg` (see above) to enable seeking.
 
-<a id="upcoming"></a>
 ## Upcoming
 
 *   **Cloud Saves Sync**: Having your games saved on the cloud (your own personal GDrive or similar) will make things twice as easy once you format, or move on with different games. The local backup, mirror and restore flows already share the backend that a remote provider will plug into.
 
-<a id="changelog"></a>
 ## Changelog
 
 Every release — with the full list of changes, notes and downloads — lives in **[CHANGELOG.md](CHANGELOG.md)** and on the **[GitHub Releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases)**.
