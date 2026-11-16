@@ -1,12 +1,14 @@
- <img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/DiscoveryTab.png" height="120" alt="Discovery" /><img src="https://github.com/user-attachments/assets/a9411d5f-e17d-4ab3-aaec-2053bd557372" height="120" alt="Explorer" /><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/Schermata_20260607_000113.png" height="120" alt="Stats" />
-
-<br clear="both" />
+ <p align="center">
+   <img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/readme-demo.gif" width="1000" alt="Ae Thicc Launcher demo: Discovery, Explorer, downloads, savegames, achievements and stats" />
+ </p>
 
 # Ae Thicc Launcher
 
-<a href="https://github.com/Shady-Unknown/AeThiccLauncher/releases/latest"><img src="https://github.com/user-attachments/assets/aee3be07-55c2-4a5d-904a-d4d1a69092ef" width="150" align="left" alt="Ae Thicc Launcher logo" /></a>
+<a href="https://github.com/Shady-Unknown/AeThiccLauncher/releases/latest"><img src="https://github.com/user-attachments/assets/aee3be07-55c2-4a5d-904a-d4d1a69092ef" width="250" align="left" alt="Ae Thicc Launcher logo" /></a>
 
 **Ae Thicc Launcher** is an unofficial desktop client for SteamRIP: browse the catalogue like a streaming service, download and update games, keep every savegame backed up, and see what you actually play.
+
+**Not just another downloader.** Games deserve to outlive storefronts: keep what you can't buy anymore — or can't afford yet — playable, keep the saves that make it yours, and **pay for the games that respect you**.
 
 It runs on Windows and Linux (including Steam Deck and Flatpak), keeps its data local, and works without any bundled API key. Optional SteamGridDB/IGDB keys unlock extra artwork and the two IGDB shelves.
 
@@ -22,6 +24,7 @@ It runs on Windows and Linux (including Steam Deck and Flatpak), keeps its data 
   - [Linux / Flatpak](#install-linux)
   - [Data and library locations](#paths)
 - [Key features](#features)
+- [Screenshots](#screenshots)
 - [Getting started](#getting-started)
 - [Optional API keys (SteamGridDB / IGDB)](#api-keys)
 - [ffmpeg on Linux](#ffmpeg)
@@ -153,6 +156,30 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Add All to Steam:** a single Library-menu action adds every installed game that is still missing a shortcut, closing and restarting Steam only once.
 *   **Automated Artwork:** The launcher downloads and applies Covers, Heroes, and Logos to your Steam Library entries dynamically!
 *   **Proton Ready:** On Linux/Steam Deck, the launcher automatically configures Steam shortcuts to use `Proton GE` or `Proton Experimental`, getting you ready to play immediately.
+
+<a id="screenshots"></a>
+## Screenshots
+
+A quick tour of the launcher. Click a shot to open it full size.
+
+<table>
+  <tr>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/01-discovery.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/01-discovery.jpg" alt="Discovery: trending, new releases and every SteamRIP shelf"></a><br><b>Discovery</b> — Trending, new releases and every SteamRIP shelf</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/02-explorer.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/02-explorer.jpg" alt="Explorer: search, game sheet, hosts and version status"></a><br><b>Explorer</b> — Search, game sheet, hosts and version status</td>
+  </tr>
+  <tr>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/03-gold-tier.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/03-gold-tier.jpg" alt="Gold Tier: community-verified studios and quality picks"></a><br><b>Gold Tier</b> — Community-verified studios and quality picks</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/04-downloads.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/04-downloads.jpg" alt="Downloads: queue, speed graph and automatic extraction"></a><br><b>Downloads</b> — Queue, speed graph and automatic extraction</td>
+  </tr>
+  <tr>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/05-savegames.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/05-savegames.jpg" alt="Savegames: versioned backups with safe restore"></a><br><b>Savegames</b> — Versioned backups with safe restore</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/06-achievements.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/06-achievements.jpg" alt="Achievements: 40 unlocks with progress and toasts"></a><br><b>Achievements</b> — 40 unlocks with progress and toasts</td>
+  </tr>
+  <tr>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/07-stats.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/07-stats.jpg" alt="Stats: hours, sessions and Entertainment Yield"></a><br><b>Stats</b> — Hours, sessions and Entertainment Yield</td>
+    <td></td>
+  </tr>
+</table>
 
 <a id="getting-started"></a>
 ## Getting started
