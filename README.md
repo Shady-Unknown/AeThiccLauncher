@@ -1,12 +1,16 @@
-<img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/DiscoveryTab.png" height="120" align="left" alt="Discovery" /><img src="https://github.com/user-attachments/assets/a9411d5f-e17d-4ab3-aaec-2053bd557372" height="120" align="left" alt="Screen2" /><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/Schermata_20260607_000113.png" height="120" align="left" alt="Screen1" /><img src="https://github.com/user-attachments/assets/aee3be07-55c2-4a5d-904a-d4d1a69092ef" width="120" align="left" alt="Logo" />
+ <img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/DiscoveryTab.png" height="120" alt="Discovery" /><img src="https://github.com/user-attachments/assets/a9411d5f-e17d-4ab3-aaec-2053bd557372" height="120" alt="Explorer" /><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/Schermata_20260607_000113.png" height="120" alt="Stats" />
 
 <br clear="both" />
 
 # Ae Thicc Launcher
 
+<a href="https://github.com/Shady-Unknown/AeThiccLauncher/releases/latest"><img src="https://github.com/user-attachments/assets/aee3be07-55c2-4a5d-904a-d4d1a69092ef" width="150" align="left" alt="Ae Thicc Launcher logo" /></a>
+
 **Ae Thicc Launcher** is an unofficial desktop client for SteamRIP: browse the catalogue like a streaming service, download and update games, keep every savegame backed up, and see what you actually play.
 
 It runs on Windows and Linux (including Steam Deck and Flatpak), keeps its data local, and works without any bundled API key. Optional SteamGridDB/IGDB keys unlock extra artwork and the two IGDB shelves.
+
+<br clear="both" />
 
 <a id="contents"></a>
 ## Contents
