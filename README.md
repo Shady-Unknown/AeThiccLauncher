@@ -161,6 +161,32 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ---
 
+## What's New in Version 1.9.5?
+
+### Discovery
+- **Recently Added**, **Recently Updated** and the SteamRIP categories now put the newest games first and actually refresh: the first page is a snapshot of the site, re-checked while the launcher is open and when you come back to the tab.
+- **Recently Updated** now shows the same list as SteamRIP's *Recently Updated* page, previous days included, instead of unrelated posts whose modification date changed.
+- **New Releases** no longer shows placeholder dates years in the future, and **Trending** follows the last 12 months instead of the all-time hype list.
+- A shelf that matches only a few games keeps loading pages instead of stopping at four cards.
+
+### Savegames
+- **Save paths** use a single versioned schema; rescanning no longer deletes a hand-typed path; the Linux compatdata path is always rebuilt from the portable Windows path, including games in a secondary Steam library.
+- **Backups** are atomic, deduplicated, configurable per game (default 5 snapshots), and every snapshot records version, reason, device and date. In-place SteamRIP updates take a pre-update snapshot labeled with the replaced build.
+- **Restore** shows date/build/type for every snapshot, refuses unsafe destinations, snapshots the current saves first, rolls back a failed swap and warns on version mismatches.
+- **Mirror** your backups incrementally to a second folder (other drive, network share, Syncthing/Drive); nothing is ever deleted, and the old "Sync Folder" setting becomes the mirror folder.
+- **Launcher data backup** covers achievements, stats and preferences automatically, with additive restores from Settings.
+- **Linux save paths** are fixed for games missing from the Ludusavi manifest.
+
+### Stats
+- **Entertainment Yield**: ranking by `hours played ÷ reference price` (`h/$`) instead of value per hour, so deep sales no longer dominate. Free or unpriced games show `N/A`.
+
+### Downloads and Achievements
+- The download queue restarts from an empty/paused state, auto-advances after extraction, failure or stop, and never starts during an extraction.
+- A first run imports achievement history silently, and toasts stay in the bottom-right corner when the window is maximized.
+
+### Linux and packaging
+- Emoji icons render again (bundled Noto Emoji), the app icon ships in all hicolor sizes, Wayland gets the desktop file name, and the Flatpak build copies assets from a clean folder.
+
 ## What's New in Version 1.9.4?
 
 ### Discovery

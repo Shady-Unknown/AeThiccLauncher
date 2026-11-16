@@ -16,6 +16,7 @@ from network.steamrip_api import (
     SteamRipBatchWorker,
     SteamRipIndexWorker,
     SteamRipPostsWorker,
+    SteamRipUpdatesWorker,
 )
 from network.igdb_meta_worker import IGDBMetaWorker, load_taxonomy
 from network.posts_index import PostsIndexWorker
@@ -25,7 +26,11 @@ CATEGORY_INDEX_FILENAME = "discovery_categories.json"
 CACHE_TTL_SECONDS = 24 * 3600
 RECENT_TTL_SECONDS = 3600
 CATEGORY_INDEX_TTL_SECONDS = 24 * 3600
-CACHE_SCHEMA = 5
+CACHE_SCHEMA = 7
+# How often the manager re-checks the row TTLs while the app stays open. The
+# check is local (no network); a request is only issued for a row that expired.
+NATIVE_REFRESH_CHECK_MS = 10 * 60 * 1000
+IGDB_REFRESH_CHECK_MS = 60 * 60 * 1000
 CATALOG_CHUNK = 40
 
 # Ordinamento scelto dall'utente. Vale per tutte le righe tranne quelle la
@@ -74,6 +79,7 @@ class DiscoveryManager(QObject):
 
     categories_changed = pyqtSignal()
     page_changed = pyqtSignal(str)
+    row_reset = pyqtSignal(str)
     cover_ready = pyqtSignal(str, str)
     scrape_requested = pyqtSignal(str, str)
     error_occurred = pyqtSignal(str)
@@ -92,6 +98,8 @@ class DiscoveryManager(QObject):
         self._cover_upgrade_attempted = set()
         self._native_workers = []
         self._native_loading = set()
+        self._native_batch = None
+        self._updates_worker = None
         self._index_worker = None
         self._category_index = None
         self._index = None
@@ -99,6 +107,7 @@ class DiscoveryManager(QObject):
         self._meta_worker = None
         self._meta_inflight = set()
         self._meta_queue = []
+        self._igdb_fetch_started = 0.0
         self._taxonomy = None
         self._match_cache = {}
         self._card_index = None
@@ -123,20 +132,48 @@ class DiscoveryManager(QObject):
             print("[Discovery] IGDB credentials not configured; rows hidden")
             return
 
-        from network.igdb_worker import IGDBWorker
-
         igdb_keys = [c["key"] for c in IGDB_CATEGORIES if c["key"] in IGDB_ROW_KEYS]
         keys_to_fetch = [k for k in igdb_keys if self._needs_fetch(k)]
-        worker = IGDBWorker(category_keys=igdb_keys,
-                            initial_keys=keys_to_fetch,
+        # The worker stays alive even when every row is cached: lazy pages are
+        # requested through it, so skipping it would freeze the rows.
+        self._replace_igdb_worker(keys_to_fetch)
+        if not keys_to_fetch:
+            print(f"[Discovery] IGDB rows from cache ({len(igdb_keys)} keys)")
+
+    def _replace_igdb_worker(self, initial_keys):
+        """Start a fresh IGDB worker, stopping the previous one first.
+
+        ``IGDBWorker`` keeps a Qt event loop alive for lazy pages; creating a
+        new one without stopping the old leaked a running thread per refresh.
+        """
+        from network.igdb_worker import IGDBWorker
+
+        previous = self._worker
+        if previous is not None and previous.isRunning():
+            try:
+                previous.stop()
+                if not previous.wait(2500):
+                    print("[Discovery] previous IGDB worker did not stop in time")
+            except RuntimeError:
+                pass
+
+        worker = IGDBWorker(category_keys=IGDB_ROW_KEYS,
+                            initial_keys=list(initial_keys),
                             parent=self)
         worker.categories_ready.connect(self._on_categories)
         worker.page_ready.connect(self._on_page)
         worker.error_occurred.connect(self.error_occurred)
+        # Keep the pagination offset of the rows we are not fetching again,
+        # otherwise the next scroll would start over from offset 0.
+        fetched = set(initial_keys)
+        worker._offsets = {
+            key: int((self._data.get(key) or {}).get("next_offset") or 0)
+            for key in IGDB_ROW_KEYS
+            if key not in fetched and self._data.get(key)
+        }
         self._worker = worker
+        self._igdb_fetch_started = time.time()
         worker.start()
-        if not keys_to_fetch:
-            print(f"[Discovery] IGDB rows from cache ({len(igdb_keys)} keys)")
 
     def start(self):
         from network.cover_worker import CoverWorker
@@ -159,15 +196,7 @@ class DiscoveryManager(QObject):
         self._start_igdb()
 
         # SteamRip: righe native (Recently Updated + categorie) paginate via REST.
-        native_jobs = self._native_jobs_to_fetch()
-        if native_jobs:
-            batch = SteamRipBatchWorker(native_jobs, parent=self)
-            batch.page_ready.connect(self._on_native_page)
-            batch.error.connect(self._on_native_error)
-            batch.finished.connect(lambda w=batch: self._cleanup_native_worker(w, None))
-            self._native_workers.append(batch)
-            batch.start()
-        else:
+        if not self._start_native_batch():
             print("[Discovery] SteamRip rows from cache")
 
         # L'indice completo (51 richieste) è opzionale: la REST API rate-limita.
@@ -181,6 +210,106 @@ class DiscoveryManager(QObject):
         self._posts_timer.setInterval(6 * 3600 * 1000)
         self._posts_timer.timeout.connect(self._start_posts_index)
         self._posts_timer.start()
+
+        # Row freshness while the app stays open: the check itself is local,
+        # requests only leave for rows whose TTL expired.
+        self._native_refresh_timer = QTimer(self)
+        self._native_refresh_timer.setInterval(NATIVE_REFRESH_CHECK_MS)
+        self._native_refresh_timer.timeout.connect(self._start_native_batch)
+        self._native_refresh_timer.start()
+
+        self._igdb_refresh_timer = QTimer(self)
+        self._igdb_refresh_timer.setInterval(IGDB_REFRESH_CHECK_MS)
+        self._igdb_refresh_timer.timeout.connect(self._refresh_igdb_if_stale)
+        self._igdb_refresh_timer.start()
+
+    def refresh_if_stale(self):
+        """Refresh the expired rows (cheap when nothing is due)."""
+        started = self._start_native_batch()
+        self._refresh_igdb_if_stale()
+        return started
+
+    def _start_native_batch(self):
+        """Fetch the first page of every SteamRip row whose cache expired."""
+        started = 0
+        batch = self._native_batch
+        if batch is None or not batch.isRunning():
+            jobs = self._native_jobs_to_fetch()
+            if jobs:
+                batch = SteamRipBatchWorker(jobs, parent=self)
+                batch.page_ready.connect(self._on_native_page)
+                batch.error.connect(self._on_native_error)
+                batch.finished.connect(
+                    lambda w=batch: self._cleanup_native_worker(w, None))
+                self._native_batch = batch
+                self._native_workers.append(batch)
+                batch.start()
+                started += len(jobs)
+        if self._start_updates_row():
+            started += 1
+        return started
+
+    def _start_updates_row(self):
+        """Refresh "Recently Updated" from the site's own list page."""
+        worker = self._updates_worker
+        if worker is not None and worker.isRunning():
+            return False
+        if not self._needs_fetch_native("recent_updates"):
+            return False
+        worker = SteamRipUpdatesWorker(parent=self)
+        worker.ready.connect(self._on_updates_ready)
+        worker.error.connect(self._on_updates_error)
+        worker.finished.connect(lambda w=worker: self._cleanup_updates_worker(w))
+        self._updates_worker = worker
+        worker.start()
+        return True
+
+    def _on_updates_ready(self, entries):
+        entries = list(entries or [])
+        if not entries:
+            # Layout change or empty page: keep whatever is cached.
+            print("[Discovery] Recently Updated: empty page, cache kept")
+            return
+        self._data["recent_updates"] = {
+            "title": self._title("recent_updates"),
+            "source": "steamrip",
+            "games": entries,
+            "cards": self._match_games(entries, source="steamrip"),
+            "next_page": None,
+            "has_more": False,
+            "fetched_at": time.time(),
+            "schema": CACHE_SCHEMA,
+            "_dirty": False,
+            "_empty_pages": 0,
+            "catalog_size": self._catalog_size(),
+        }
+        self._card_index = None
+        self._save_cache()
+        print(f"[Discovery] Recently Updated: {len(entries)} entries")
+        self.row_reset.emit("recent_updates")
+
+    def _on_updates_error(self, message):
+        print(f"[Discovery] Recently Updated error: {message}")
+
+    def _cleanup_updates_worker(self, worker):
+        if self._updates_worker is worker:
+            self._updates_worker = None
+
+    def _refresh_igdb_if_stale(self):
+        if not secrets.has_igdb_credentials():
+            return
+        if self._igdb_fetch_started and time.time() - self._igdb_fetch_started < 120:
+            # A refresh is already running: do not replace its worker.
+            return
+        if self._worker is not None and getattr(self._worker, "_loading_pages", None):
+            # A lazy page is in flight: retry on the next tick.
+            return
+        keys = [c["key"] for c in self._igdb_categories()
+                if self._needs_fetch(c["key"])]
+        if not keys:
+            return
+        print(f"[Discovery] IGDB refresh: {', '.join(keys)}")
+        self._replace_igdb_worker(keys)
 
     # ── posts index ──────────────────────────────────────────────────
 
@@ -344,10 +473,14 @@ class DiscoveryManager(QObject):
             if cat.get("source") != "steamrip":
                 continue
             key = cat["key"]
+            if key == "recent_updates":
+                # Served by the site's curated "Recently Updated" page, not
+                # by the REST feed: ``orderby=modified`` includes unrelated
+                # edits and drops the real update order.
+                continue
             if not self._needs_fetch_native(key):
                 continue
-            orderby = "modified" if key == "recent_updates" else "date"
-            jobs.append((key, 1, cat.get("category_id"), orderby))
+            jobs.append((key, 1, cat.get("category_id"), "date"))
         return jobs
 
     def _needs_fetch_native(self, key):
@@ -355,6 +488,9 @@ class DiscoveryManager(QObject):
         if not entry:
             return True
         if entry.get("source") != "steamrip" or entry.get("schema") != CACHE_SCHEMA:
+            return True
+        if entry.get("catalog_size") != self._catalog_size():
+            # The catalog changed: the cached posts must be matched again.
             return True
         ttl = (RECENT_TTL_SECONDS
                if key in ("recent_updates", "recent_added")
@@ -390,6 +526,10 @@ class DiscoveryManager(QObject):
                         continue  # pulizia righe non più esistenti
                     if (isinstance(entry, dict)
                             and isinstance(entry.get("cards"), list)):
+                        if entry.get("schema") != CACHE_SCHEMA:
+                            # Old schema: refetch instead of showing a stale
+                            # snapshot with the previous (append-only) order.
+                            continue
                         entry.setdefault("games", [])
                         entry.setdefault("title", self._title(key))
                         self._data[key] = entry
@@ -429,11 +569,22 @@ class DiscoveryManager(QObject):
                 "_dirty": False,
                 "cards": cards,
             }
+        tmp = None
         try:
-            with open(self._cache_path(), "w", encoding="utf-8") as f:
+            path = self._cache_path()
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, separators=(",", ":"), ensure_ascii=False)
+            # Atomic swap: an interrupted write must not leave a truncated
+            # cache behind (the next start would throw every row away).
+            os.replace(tmp, path)
         except Exception as e:
             print(f"[Discovery] cache save error: {e}")
+            try:
+                if tmp and os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     # ── category index (url -> SteamRip category ids) ────────────────
 
@@ -520,6 +671,7 @@ class DiscoveryManager(QObject):
 
     def _on_categories(self, cat_dict):
         now = time.time()
+        self._igdb_fetch_started = 0.0
         for key, games in cat_dict.items():
             existing = self._data.get(key) or {}
             if not games and (existing.get("cards") or existing.get("games")):
@@ -551,8 +703,6 @@ class DiscoveryManager(QObject):
             QTimer.singleShot(15000, self._retry_empty_igdb)
 
     def _retry_empty_igdb(self):
-        from network.igdb_worker import IGDBWorker
-
         if not secrets.has_igdb_credentials():
             return
         keys = [
@@ -563,14 +713,7 @@ class DiscoveryManager(QObject):
         ]
         if not keys:
             return
-        worker = IGDBWorker(category_keys=IGDB_ROW_KEYS,
-                            initial_keys=keys,
-                            parent=self)
-        worker.categories_ready.connect(self._on_categories)
-        worker.page_ready.connect(self._on_page)
-        worker.error_occurred.connect(self.error_occurred)
-        self._worker = worker
-        worker.start()
+        self._replace_igdb_worker(keys)
 
     def _on_page(self, key, games, has_more=False):
         entry = self._data.setdefault(key, {
@@ -635,27 +778,63 @@ class DiscoveryManager(QObject):
 
     @_perf("native_page")
     def _on_native_page(self, key, posts, page, total_pages):
-        entry = self._data.setdefault(key, {
-            "title": self._title(key),
-            "source": "steamrip",
-            "games": [],
-            "next_page": 1,
-            "has_more": True,
-            "fetched_at": time.time(),
-            "schema": CACHE_SCHEMA,
-            "cards": [],
-        })
+        entry = self._data.get(key)
+        if entry is None:
+            entry = {
+                "title": self._title(key),
+                "source": "steamrip",
+                "games": [],
+                "next_page": 1,
+                "has_more": True,
+                "fetched_at": 0,
+                "schema": CACHE_SCHEMA,
+                "cards": [],
+            }
+            self._data[key] = entry
         entry["source"] = "steamrip"
         entry["title"] = self._title(key)
-        if posts:
-            entry.setdefault("games", []).extend(posts)
-        entry["next_page"] = int(page) + 1
-        entry["has_more"] = int(page) < int(total_pages or 0)
-        entry["fetched_at"] = time.time()
         entry["schema"] = CACHE_SCHEMA
-        entry["_dirty"] = False
-        added = self._append_matched(key, posts, source="steamrip")
-        if entry["has_more"] and not added and posts:
+        page = int(page or 1)
+        total_pages = int(total_pages or 0)
+
+        if page <= 1:
+            # First page = snapshot of the site order. It must *replace* the
+            # row: appending new arrivals at the end made every date-based row
+            # look frozen, because the newest games never reached the front.
+            if not posts and entry.get("cards"):
+                # Empty/error response: never wipe a valid row.
+                entry["_dirty"] = False
+                return
+            entry["games"] = list(posts)
+            entry["cards"] = self._match_games(posts, source="steamrip")
+            entry["next_page"] = 2
+            entry["has_more"] = 1 < total_pages
+            entry["_empty_pages"] = 0
+            entry["_dirty"] = False
+            entry["fetched_at"] = time.time()
+            entry["catalog_size"] = self._catalog_size()
+            self._card_index = None
+            self._save_cache()
+            self.row_reset.emit(key)
+            return
+
+        # Deeper pages are older than the first one: append without touching
+        # ``fetched_at`` (scrolling must not make a stale row look fresh).
+        games = entry.setdefault("games", [])
+        known_urls = {str(p.get("url") or "").rstrip("/") for p in games}
+        fresh = []
+        for post in posts or []:
+            url = str(post.get("url") or "").rstrip("/")
+            if url and url in known_urls:
+                continue
+            if url:
+                known_urls.add(url)
+            fresh.append(post)
+        games.extend(fresh)
+        entry["next_page"] = page + 1
+        entry["has_more"] = page < total_pages
+        added = self._append_matched(key, fresh, source="steamrip")
+        if entry["has_more"] and not added and fresh:
             self._track_empty_page(entry, added, True)
         else:
             entry["_empty_pages"] = 0
@@ -669,11 +848,16 @@ class DiscoveryManager(QObject):
     def _cleanup_native_worker(self, worker, key=None):
         if worker in self._native_workers:
             self._native_workers.remove(worker)
+        if self._native_batch is worker:
+            self._native_batch = None
         if key:
             self._native_loading.discard(key)
 
     def request_more(self, key):
         """Ask for the next page of a category (IGDB or native SteamRip)."""
+        if key == "recent_updates":
+            # Single page: the site's curated list has no pagination.
+            return False
         if key == "all_games":
             entry = self._ensure_catalog_row()
             if not entry.get("has_more"):
@@ -687,6 +871,10 @@ class DiscoveryManager(QObject):
 
         if entry.get("source") == "steamrip":
             if key in self._native_loading:
+                return False
+            batch = self._native_batch
+            if batch is not None and batch.isRunning():
+                # The startup/refresh batch is already loading first pages.
                 return False
             row = self._row_for_key(key) or {}
             page = int(entry.get("next_page") or 2)
@@ -1330,6 +1518,13 @@ class DiscoveryManager(QObject):
             try:
                 posts.stop()
                 posts.wait(3000)
+            except RuntimeError:
+                pass
+        updates = self._updates_worker
+        if updates is not None and updates.isRunning():
+            try:
+                updates.stop()
+                updates.wait(1500)
             except RuntimeError:
                 pass
         for w in (self._cover_worker, self._worker):

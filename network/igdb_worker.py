@@ -25,8 +25,14 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 #   themes = [X]  -> IGDB theme id
 #   ""            -> no genre/theme restriction (trending / new releases)
 IGDB_CATEGORIES = [
-    {"key": "trending", "title": "\U0001f525 Trending", "filter": "", "sort": "hypes desc"},
-    {"key": "new_releases", "title": "\U0001f195 New Releases", "filter": "", "sort": "first_release_date desc"},
+    # IGDB ``hypes`` is an all-time follower count: sorted alone it pins the
+    # row to the same classics for years. A rolling window keeps it current.
+    {"key": "trending", "title": "\U0001f525 Trending", "filter": "",
+     "sort": "hypes desc", "min_release_days": 365},
+    # Without a ceiling this sorts every planned date, so the row opened with
+    # placeholder releases dated 2029-2032 instead of actual new releases.
+    {"key": "new_releases", "title": "\U0001f195 New Releases", "filter": "",
+     "sort": "first_release_date desc", "max_release": True},
     {"key": "horror", "title": "\U0001f9df Horror", "filter": "genres = [5]", "sort": "hypes desc"},
     {"key": "sandbox", "title": "\U0001f3dd Sandbox", "filter": "themes = [33]", "sort": "hypes desc"},
     {"key": "survival", "title": "\u26fa Survival", "filter": "themes = [21]", "sort": "hypes desc"},
@@ -61,6 +67,31 @@ def igdb_cover_big(cover_url):
     if url.startswith("//"):
         url = "https:" + url
     return url
+
+
+def build_query(category, offset, now=None):
+    """Apicalypse body for one page of a discovery row.
+
+    ``max_release``/``min_release_days`` keep the time-based rows anchored to
+    the present: IGDB stores planned dates too, so an unbounded descending
+    sort surfaced placeholder releases years in the future.
+    """
+    now = int(now if now is not None else time.time())
+    where = COMMON_WHERE
+    if category.get("filter"):
+        where += f" & {category['filter']}"
+    if category.get("max_release"):
+        where += f" & first_release_date <= {now}"
+    window = int(category.get("min_release_days") or 0)
+    if window > 0:
+        where += f" & first_release_date >= {now - window * 86400}"
+    return (
+        f"fields {FIELDS}; "
+        f"where {where}; "
+        f"sort {category['sort']}; "
+        f"limit {PAGE_SIZE}; "
+        f"offset {int(offset)};"
+    )
 
 
 def normalize_game(raw):
@@ -185,16 +216,7 @@ class IGDBWorker(QThread):
         }
 
     def _fetch_page(self, category, offset):
-        where = COMMON_WHERE
-        if category.get("filter"):
-            where += f" & {category['filter']}"
-        body = (
-            f"fields {FIELDS}; "
-            f"where {where}; "
-            f"sort {category['sort']}; "
-            f"limit {PAGE_SIZE}; "
-            f"offset {offset};"
-        )
+        body = build_query(category, offset)
         try:
             r = requests.post(
                 f"{IGDB_BASE}/games",

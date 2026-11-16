@@ -48,6 +48,10 @@ SORT_CHOICES = (
 PROGRESSIVE_CHUNK = 10
 INITIAL_CARD_BUDGET = 40
 GROW_CHUNK = 10
+# A row can match very few posts: without overflow there is no scroll event,
+# so the next page was never requested and the row stayed at a handful of
+# cards. Top it up while it is in focus.
+MIN_ROW_CARDS = 20
 PERF_LOG_MS = 40
 PERF_DEBUG = os.environ.get('SRP_DEBUG_PERF') == '1'
 
@@ -581,7 +585,7 @@ class CategoryRow(QWidget):
             return
         chunk = self._pending[:PROGRESSIVE_CHUNK]
         del self._pending[:PROGRESSIVE_CHUNK]
-        self.append_cards(chunk)
+        self._build_cards(chunk)
         # Ci fermiamo al budget: le altre card si costruiscono quando si
         # scorre verso destra (evita raffiche di decode immagine all'apertura).
         if self._pending and len(self._card_data) < self._auto_budget:
@@ -608,7 +612,7 @@ class CategoryRow(QWidget):
         if need > 0 and self._pending:
             chunk = self._pending[:need]
             del self._pending[:need]
-            self.append_cards(chunk)
+            self._build_cards(chunk)
         if self._pending:
             self._build_timer.start()
 
@@ -637,12 +641,27 @@ class CategoryRow(QWidget):
     def original_cards(self):
         return self._cards[:len(self._card_data)]
 
+    def data_cards(self):
+        """Card dicts in site order, built or still pending."""
+        return list(self._card_data) + list(self._pending)
+
     @_perf("append_cards")
     def append_cards(self, card_data_list):
+        """Add new card dicts (a page) after everything already queued."""
+        if not card_data_list:
+            return
+        if self._pending:
+            # The data order is authoritative: new cards belong after the ones
+            # still waiting to be built. Building them now would insert the new
+            # widgets before the pending chunk and scramble the site order.
+            self._pending.extend(card_data_list)
+            return
+        self._build_cards(card_data_list)
+
+    def _build_cards(self, card_data_list):
         if not card_data_list:
             return
         old_n = len(self._card_data)
-        fit_count = self._fit_count()
         self._card_data.extend(card_data_list)
         insert_at = old_n
         for card_data in card_data_list:
@@ -1054,6 +1073,7 @@ class DiscoveryTab(QWidget):
         if discovery is not None:
             discovery.categories_changed.connect(self._on_discovery_changed)
             discovery.page_changed.connect(self._on_discovery_page_changed)
+            discovery.row_reset.connect(self._on_discovery_row_reset)
             discovery.cover_ready.connect(self._on_cover_ready)
             discovery.meta_ready.connect(self._on_meta_ready)
             discovery.start()
@@ -1502,9 +1522,11 @@ class DiscoveryTab(QWidget):
         popup.show_game(title)
 
     @_perf("replace_row")
-    def _replace_row(self, idx, new_row):
+    def _replace_row(self, idx, new_row, reset_scroll=False):
         old_row = self._category_rows[idx]
-        prev_scroll = old_row._h_scroll.horizontalScrollBar().value()
+        prev_scroll = 0
+        if not reset_scroll:
+            prev_scroll = old_row._h_scroll.horizontalScrollBar().value()
         new_row._category_key = old_row._category_key
         new_row.setParent(self._scroller)
         self._category_rows[idx] = new_row
@@ -1594,7 +1616,7 @@ class DiscoveryTab(QWidget):
         # Append incrementale: non ricreiamo la riga (evita il softlock durante il drag).
         row = self._category_rows[idx]
         new_cards = self._cards_for_key(key)
-        existing = {c.get("title") for c in getattr(row, '_card_data', []) if c.get("title")}
+        existing = {c.get("title") for c in row.data_cards() if c.get("title")}
         added = [c for c in new_cards if c.get("title") not in existing]
 
         if added:
@@ -1605,6 +1627,39 @@ class DiscoveryTab(QWidget):
                                   theme=self._theme_data(), progressive=True)
             self._replace_row(idx, new_row)
 
+        self._dirty_keys.discard(key)
+        self._update_cover_window()
+
+    @_perf("row_reset")
+    def _on_discovery_row_reset(self, key):
+        """The manager replaced a row snapshot (first page refresh).
+
+        Rebuilding the row while it is being dragged used to softlock the
+        scroll area, so a moving row is retried once it settles.
+        """
+        self.hide_network_notice()
+        self._row_loading.pop(key, None)
+        self._meta_requested_keys.discard(key)
+        idx = self._index_of_key(key)
+        if idx is None:
+            return
+        if key not in self._visible_keys():
+            self._dirty_keys.add(key)
+            return
+        row = self._category_rows[idx]
+        scroll = row._h_scroll
+        moving = (
+            getattr(scroll, "_is_dragging", False)
+            or scroll._momentum_timer.isActive()
+            or scroll._snap_anim is not None
+        )
+        if moving:
+            QTimer.singleShot(600, lambda k=key: self._on_discovery_row_reset(k))
+            return
+        new_row = CategoryRow(self._discovery_title(key),
+                              self._cards_for_key(key),
+                              theme=self._theme_data(), progressive=True)
+        self._replace_row(idx, new_row, reset_scroll=True)
         self._dirty_keys.discard(key)
         self._update_cover_window()
 
@@ -1632,6 +1687,32 @@ class DiscoveryTab(QWidget):
         built = max(1, len(row._card_data))
         if value + vw >= built * step * 0.8:
             row.build_more()
+
+    def _maybe_top_up_row(self, row):
+        """Fill a row that matched too few games to scroll.
+
+        With no overflow there is no ``valueChanged`` event, so the next page
+        was never requested and the row stayed at a handful of cards.
+        """
+        key = getattr(row, '_category_key', None)
+        if key is None:
+            return
+        # Count the data, not the widgets: a row builds its cards 10 at a time,
+        # so ``_card_data`` alone would look sparse right after a rebuild.
+        if len(row.data_cards()) >= MIN_ROW_CARDS:
+            return
+        discovery = self._discovery()
+        if discovery is None:
+            return
+        if self._row_loading.get(key):
+            return
+        now = time.monotonic()
+        if now < self._load_cooldown.get(key, 0):
+            return
+        if not discovery.request_more(key):
+            return
+        self._row_loading[key] = True
+        self._load_cooldown[key] = now + 0.9
 
     @_perf("maybe_load_more")
     def _maybe_load_more(self, row, value):
@@ -1711,6 +1792,8 @@ class DiscoveryTab(QWidget):
         if dirty_slots:
             self._rebuild_visible_rows()
             return
+
+        self._maybe_top_up_row(focus_row)
 
         if not hasattr(self, '_cover_active_keys'):
             self._cover_active_keys = set()
@@ -1805,6 +1888,9 @@ class DiscoveryTab(QWidget):
             if self.mw.installed_games and not self._category_rows[0]._cards:
                 self.refresh_library()
             self._update_cover_window()
+        discovery = self._discovery()
+        if discovery is not None and hasattr(discovery, "refresh_if_stale"):
+            discovery.refresh_if_stale()
 
     def _layout_fades(self):
         w, h = self.width(), self.height()

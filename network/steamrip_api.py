@@ -23,6 +23,7 @@ from core.meta_utils import strip_title
 
 BASE = "https://steamrip.com"
 WP_API = f"{BASE}/wp-json/wp/v2"
+UPDATED_URL = f"{BASE}/updated-games"
 PER_PAGE = 30
 MAX_PER_PAGE = 100
 REQUEST_DELAY_SECONDS = 0.2
@@ -141,6 +142,75 @@ def fetch_page_cover(page_url, timeout=10):
         return ""
 
 
+def fetch_updated_games(timeout=20):
+    """Fetch the site's curated "Recently Updated" list.
+
+    ``steamrip.com/updated-games`` is server-rendered; the WP REST
+    ``orderby=modified`` feed cannot reproduce it (it also bumps posts for
+    unrelated edits). Raises on a bad status so the caller keeps its cache.
+    """
+    last = None
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        last = requests.get(
+            UPDATED_URL,
+            headers={"User-Agent": UA, "Accept": "text/html"},
+            impersonate="chrome120",
+            timeout=timeout,
+        )
+        if last.status_code != 429:
+            break
+        time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
+    if last is None or last.status_code != 200:
+        status = getattr(last, "status_code", "?")
+        raise RuntimeError(f"SteamRip updates page status {status}")
+    return parse_updated_games(last.text)
+
+
+def parse_updated_games(html_text):
+    """Parse ``updated-games`` into ``[{title, url, build, date, ...}]``.
+
+    Layout: one ``div.updated-list-date`` per day followed by a sibling
+    ``ul.updated-list`` with one ``li.updated-list-item`` per game, in the
+    same order the site shows (newest first).
+    """
+    soup = BeautifulSoup(html_text or "", "lxml")
+    entries = []
+    seen = set()
+    for date_node in soup.find_all("div", class_="updated-list-date"):
+        date = date_node.get_text(" ", strip=True)
+        list_node = date_node.find_next_sibling("ul", class_="updated-list")
+        if list_node is None:
+            continue
+        for item in list_node.select("li.updated-list-item"):
+            link = item.find("a", class_="updated-card")
+            if link is None:
+                continue
+            href = str(link.get("href") or "").strip()
+            span = link.find("span", class_="updated-card-title")
+            raw_title = span.get_text(" ", strip=True) if span else ""
+            build_node = link.find("span", class_="updated-list-build")
+            build = build_node.get_text(" ", strip=True) if build_node else ""
+            title, version, mp_tag = strip_title(raw_title)
+            url = href
+            if url.startswith("/"):
+                url = BASE + url
+            url = url.rstrip("/")
+            if not title or not url or url in seen:
+                continue
+            seen.add(url)
+            entries.append({
+                "title": title.strip(),
+                "raw_title": raw_title.strip(),
+                "url": url,
+                "build": build,
+                "version": version,
+                "mp_tag": mp_tag,
+                "date": date,
+                "categories": [],
+            })
+    return entries
+
+
 def fetch_posts(page=1, category_ids=None, orderby="date", order="desc",
                 per_page=PER_PAGE, fields=DEFAULT_FIELDS, timeout=15):
     """
@@ -193,6 +263,31 @@ class SteamRipPostsWorker(QThread):
         except Exception as e:
             print(f"[SteamRipAPI] page {self.page} error for '{self.key}': {e}")
             self.error.emit(self.key, str(e))
+
+
+class SteamRipUpdatesWorker(QThread):
+    """The site's curated "Recently Updated" page (single HTML page)."""
+
+    ready = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stop_flag = False
+
+    def stop(self):
+        self._stop_flag = True
+
+    def run(self):
+        try:
+            entries = fetch_updated_games()
+        except Exception as e:
+            print(f"[SteamRipAPI] updates page error: {e}")
+            self.error.emit(str(e))
+            return
+        if self._stop_flag:
+            return
+        self.ready.emit(entries)
 
 
 class SteamRipBatchWorker(QThread):

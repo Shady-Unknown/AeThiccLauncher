@@ -2,6 +2,43 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## v1.9.5 — 2026-11-16
+
+### Discovery
+- **The shelves no longer freeze.** Recently Added, Recently Updated and the SteamRIP category rows now refresh their first page as a snapshot of the site instead of appending new arrivals to the end, so the newest games appear first. The rows are re-checked while the launcher stays open and when the tab is reopened, and a row that matches only a handful of games keeps loading instead of stopping at four cards.
+- **Recently Updated** mirrors SteamRIP's own *Recently Updated* page: same games, same order and previous days included, instead of the newest posts whose modification date changed.
+- **New Releases** lists releases that already happened instead of placeholder dates years in the future, and **Trending** is a rolling 12-month window instead of the all-time hype list that kept the same games on top.
+- The "IGDB not configured" banner disappears as soon as the keys are saved, and the launcher offers a restart because the discovery rows are built at startup.
+
+### Savegames
+- **Save paths:** "Rescan for Save Folder" no longer deletes a path typed by hand; `savegames.json` uses a single versioned schema; the Linux compatdata path is always rebuilt from the portable Windows path, including secondary Steam libraries; `%userprofile%\My Documents` is normalized to `Documents`.
+- **Backups:** snapshots are written atomically, identical content is not duplicated, the per-game history size is configurable (default 5), every snapshot stores its own version/reason/device/date, every game folder gets its mini cover and manifest, and an in-place SteamRIP update takes a pre-update snapshot labeled with the replaced build.
+- **Restore:** the dialog lists date, build and type; restoring is disabled for games that are not installed; unsafe destinations are refused; the current saves are snapshotted before overwriting; the swap is atomic with rollback; a version mismatch shows a clear warning.
+- **Mirror:** backups are always written to the launcher data folder and can be mirrored incrementally to a second folder (another drive, a network share, a Syncthing/Drive folder). The mirror never deletes anything and shows per-game local/mirror states with builds; the old "Sync Folder" setting becomes the mirror folder and existing backups there are imported once.
+- **Launcher data backup:** achievements, stats and preferences are backed up automatically (debounced) when they change and at close, and can be backed up or restored from Settings. Restores are additive merges: local data wins and nothing is deleted.
+- **Linux save paths:** the Proton path is no longer generated while running on Windows, so games missing from the Ludusavi manifest are found again on Linux/Steam Deck, and corrupted values are rebuilt on the next sync.
+- **Ready for the cloud:** restore, mirror and launcher-state backups share one backend seam, so a remote provider can be added without touching the UI. Cloud sync itself is not part of this release.
+
+### Downloads
+- Adding the first link to an empty queue starts it again, the next item starts automatically when one finishes, fails or is stopped, and a download can no longer start during an extraction.
+
+### Stats
+- **Entertainment Yield:** value/hour becomes `hours played ÷ reference price` (`h/$`), so a deep sale no longer inflates the ranking. Free games or games without a known reference price show `N/A`, the per-game box shows the hours and the price used, and the menu offers **Highest Yield** / **Lowest Yield**.
+
+### Achievements
+- A first run imports existing history silently instead of announcing every already-true achievement, and the toasts stay in the bottom-right corner when the window is maximized.
+
+### Explorer
+- The game sheet falls back from the SteamRip featured image to the wide SteamGridDB artwork, never shows the portrait placeholder as a background, and no longer keeps the previous game's background while a new image loads.
+
+### Linux and packaging
+- Emoji icons render again thanks to a bundled Noto Emoji font, the app icon ships in all hicolor sizes, Wayland gets the desktop file name for the taskbar icon, and the Flatpak build copies its assets from a clean folder.
+
+### Fixed
+- **Onboarding:** the library step no longer lists every mount point; folders are chosen with the native dialog only, which also fixes the long `/proc`, `/sys` and bind-mount list on btrfs/GNOME.
+- **Version status:** build ids are no longer built out of version strings, a version label no longer appears in the STEAMRIP BUILD slot, "Steam is ahead" reads as information, a string `build` no longer crashes the card, and stale builds are cleared when a page changes format.
+- **Sale badge:** the "ON SALE ON" badge is no longer appended twice when cached and live prices are applied.
+
 ## v1.9.4 — 2026-11-12
 
 ### Discovery
