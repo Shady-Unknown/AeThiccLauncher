@@ -130,9 +130,11 @@ jobs:
       - name: Extract Version from Commit Message
         id: get_version
         run: |
-          # Estrapola la stringa dopo "Release_" ignorando maiuscole/minuscole
-          # Il messaggio arriva via env: interpolarlo nel bash si rompe con le virgolette.
-          VERSION=$(printf '%s' "$COMMIT_MSG" | grep -ioP '(?<=Release_)\S+' | head -n 1 || true)
+          # Estrapola solo la versione semantica dopo "Release_" (maiuscole/minuscole
+          # indifferenti): un suffisso tipo "Release_1.9.5: note" non deve finire
+          # dentro il tag. Il messaggio arriva via env: interpolarlo nel bash si
+          # rompe con le virgolette.
+          VERSION=$(printf '%s' "$COMMIT_MSG" | grep -ioP '(?<=Release_)\d+\.\d+\.\d+' | head -n 1 || true)
           if [ -z "$VERSION" ]; then VERSION="latest"; fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
         env:
