@@ -1,59 +1,32 @@
 <img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/DiscoveryTab.png" height="120" align="left" alt="Discovery" /><img src="https://github.com/user-attachments/assets/a9411d5f-e17d-4ab3-aaec-2053bd557372" height="120" align="left" alt="Screen2" /><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/Schermata_20260607_000113.png" height="120" align="left" alt="Screen1" /><img src="https://github.com/user-attachments/assets/aee3be07-55c2-4a5d-904a-d4d1a69092ef" width="120" align="left" alt="Logo" />
 
-<br clear="both" />
+# Ae Thicc Launcher
 
+**Ae Thicc Launcher** is an unofficial desktop client for SteamRIP: browse the catalogue like a streaming service, download and update games, keep every savegame backed up, and see what you actually play.
 
+It runs on Windows and Linux (including Steam Deck and Flatpak), keeps its data local, and works without any bundled API key. Optional SteamGridDB/IGDB keys unlock extra artwork and the two IGDB shelves.
 
-## Community
-<a href="https://discord.gg/4WF7YU3ynC"><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/discorda.jpg" width="80" align="left" alt="Ae Thicc Launcher Discord" /></a>
+<a id="contents"></a>
+## Contents
 
-**Join the Ae Thicc Launcher Discord**. Get help with setup, report bugs, suggest features, or just hang out and talk games.
+- [About](#about)
+- [Community](#community)
+- [Installation](#install)
+  - [Windows](#install-windows)
+  - [Linux / Flatpak](#install-linux)
+  - [Data and library locations](#paths)
+- [Key features](#features)
+- [Getting started](#getting-started)
+- [Optional API keys (SteamGridDB / IGDB)](#api-keys)
+- [ffmpeg on Linux](#ffmpeg)
+- [Technical notes for power users](#technical-notes)
+- [Upcoming](#upcoming)
+- [Changelog](#changelog)
 
-**[discord.gg/4WF7YU3ynC](https://discord.gg/4WF7YU3ynC)**
+<a id="about"></a>
+## About
 
-<br clear="both" />
-
-
-# TO INSTALL (LINUX)
-_flatpak install --user Ae_Thicc_Launcher_Linux.flatpak_
-
-Remember to Install ffmpeg to have game trailers working in the brand new "Discovery" view!
-
-Trailers play out of the box. To also get smooth seeking on Linux, install `ffmpeg` with your distribution's package manager:
-
-| Distribution | Command |
-|---|---|
-| Debian / Ubuntu / Mint / Pop!_OS | `sudo apt install ffmpeg` |
-| Fedora | `sudo dnf install ffmpeg` |
-| Arch / Manjaro / EndeavourOS | `sudo pacman -S ffmpeg` |
-| openSUSE | `sudo zypper install ffmpeg` |
-
-# TO INSTALL (Windows)
-_Run the `Ae_Thicc_Launcher_Setup.exe` installer (or use the portable zip) and launch the app. The installer puts the application in the standard Programs folder (`C:\Program Files\AeThiccLauncher`) and asks for the usual UAC elevation; it does not install anything in AppData._
-
-_Runtime data/cache stays in `%LOCALAPPDATA%\AeThiccLauncher` (the historical location); the default game library is `C:\SteamRip`. On first run the setup wizard shows these defaults and lets you move data, cache or library to another drive or separate paths if you prefer._
-
-_If Windows SmartScreen or your antivirus flags the launcher, allow `Ae_Thicc_Launcher.exe`. Malwarebytes in particular may block `steamrip.com` as a website (not as a file): add an exception for the launcher and for `steamrip.com` if you want Discovery to load._
-
-## Data & library locations (Windows and Linux/Flatpak)
-
-Defaults:
-- **Application:** `C:\Program Files\AeThiccLauncher` on Windows (removed on uninstall).
-- **Data/cache:** `%LOCALAPPDATA%\AeThiccLauncher` on Windows; the XDG data directory on Linux/Flatpak, with the historical `~/.cache/AeThiccLauncher/downloads` preserved unless you pick a custom root.
-- **Game library:** `C:\SteamRip` on Windows, `~/SteamRip` on Linux/Flatpak.
-
-On first run the wizard asks for:
-- **Data & cache folder** — config, catalog, covers, stats, logs and temp files.
-- **Game libraries** — one or more folders scanned for installed games and offered as install destinations (the default `SteamRip` folder is preselected, and you can add one on another drive).
-
-You can change them later from **Settings → Run setup wizard**. A bootstrap file `aethicc.paths.json` records a data root only when you move it away from the default; if the install folder is read-only (for example `/app` inside Flatpak, or `Program Files` on Windows) it is written to the user data directory instead. Existing data in the old location is offered as an optional copy — nothing is deleted.
-
-
-# Ae Thicc Launcher (Unofficial SteamRIP Client)
-
-Welcome to **Ae Thicc Launcher**, the ultimate desktop companion designed to seamlessly manage, download, and update your games library. 
-
-This launcher doesn't just have an aesthetic; it has a **purpose**. 
+This launcher doesn't just have an aesthetic; it has a **purpose**.
 
 In an industry increasingly dominated by the **aggressive monetization** of big corporations, **game preservation** and accessibility have never been **more critical**. **Ae Thicc Launcher** was built to ensure that everyone, regardless of their current financial capability, can access, play, and retain the games they love. We care deeply about true software ownership, giving you the tools to preserve your game files and your hard-earned savegames forever.
 
@@ -63,15 +36,62 @@ However, this freedom comes with a strong moral compass. We believe in voting wi
 
 While many of our ethical features are still actively being developed behind the scenes, everything we build aims to strike this balance: do what you want with YOUR software, but always remember to reward the non-toxic, passionate developers who make this industry great.
 
----
-## UPCOMING
+<a id="community"></a>
+## Community
 
-*   **Cloud Saves Sync**: Having your games saved on the cloud (your own personal GDrive or similar) will make things twice as easy once you format, or move on with different games.
+<a href="https://discord.gg/4WF7YU3ynC"><img src="https://github.com/Shady-Unknown/ae-thicc-launcher/blob/main/discorda.jpg" width="80" align="left" alt="Ae Thicc Launcher Discord" /></a>
 
+**Join the Ae Thicc Launcher Discord**. Get help with setup, report bugs, suggest features, or just hang out and talk games.
 
-## Key Features
+**[discord.gg/4WF7YU3ynC](https://discord.gg/4WF7YU3ynC)**
 
+<br clear="both" />
+
+<a id="install"></a>
+## Installation
+
+Grab the latest release from the [releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases/latest).
+
+<a id="install-windows"></a>
+### Windows
+
+_Run the `Ae_Thicc_Launcher_Setup.exe` installer (or use the portable zip) and launch the app. The installer puts the application in the standard Programs folder (`C:\Program Files\AeThiccLauncher`) and asks for the usual UAC elevation; it does not install anything in AppData._
+
+_Runtime data/cache stays in `%LOCALAPPDATA%\AeThiccLauncher` (the historical location); the default game library is `C:\SteamRip`. On first run the setup wizard shows these defaults and lets you move data, cache or library to another drive or separate paths if you prefer._
+
+_If Windows SmartScreen or your antivirus flags the launcher, allow `Ae_Thicc_Launcher.exe`. Malwarebytes in particular may block `steamrip.com` as a website (not as a file): add an exception for the launcher and for `steamrip.com` if you want Discovery to load._
+
+<a id="install-linux"></a>
+### Linux / Flatpak
+
+```bash
+flatpak install --user Ae_Thicc_Launcher_Linux.flatpak
+```
+
+Trailers play out of the box; for smooth seeking inside the sandbox, see [ffmpeg on Linux](#ffmpeg).
+
+<a id="paths"></a>
+### Data and library locations
+
+Defaults:
+
+- **Application:** `C:\Program Files\AeThiccLauncher` on Windows (removed on uninstall).
+- **Data/cache:** `%LOCALAPPDATA%\AeThiccLauncher` on Windows; the XDG data directory on Linux/Flatpak, with the historical `~/.cache/AeThiccLauncher/downloads` preserved unless you pick a custom root.
+- **Game library:** `C:\SteamRip` on Windows, `~/SteamRip` on Linux/Flatpak.
+
+On first run the wizard asks for:
+
+- **Data & cache folder** — config, catalog, covers, stats, logs and temp files.
+- **Game libraries** — one or more folders scanned for installed games and offered as install destinations (the default `SteamRip` folder is preselected, and you can add one on another drive).
+
+You can change them later from **Settings → Run setup wizard**. A bootstrap file `aethicc.paths.json` records a data root only when you move it away from the default; if the install folder is read-only (for example `/app` inside Flatpak, or `Program Files` on Windows) it is written to the user data directory instead. Existing data in the old location is offered as an optional copy — nothing is deleted.
+
+<a id="features"></a>
+## Key features
+
+<a id="features-discovery"></a>
 ### Discovery
+
 *   **Doomscroll the catalog:** a single-row horizontal scroller that never ends. Pick a category, keep scrolling, find the game you'll install at 3 AM.
 *   **Per-category browsing:** Trending, New Releases, Recently Added, Recently Updated and every SteamRIP category, one at a time, with a jump selector when you already know where to go.
 *   **Search anything:** type a few characters and get one row with every matching game across the whole catalog.
@@ -81,7 +101,9 @@ While many of our ethical features are still actively being developed behind the
 *   **Install in one click:** the *Install* button opens the game in the Games Explorer with its download links ready.
 *   **Built-in trailer player:** fullscreen, volume, mute and smooth seeking; trailers are cached locally, so repeat views start instantly.
 
+<a id="features-explorer"></a>
 ### Smart Explorer & Downloader
+
 *   **Integrated Catalog:** Instantly search through the entire SteamRIP database with a lightning-fast auto-completing search bar.
 *   **Cloudflare Bypass:** A stealthy, built-in browser handles Cloudflare challenges automatically whenever possible, so your downloads never get stuck.
 *   **Smart Resume**: if the provider supports it you can resume your download, even between sessions. Low bandwidth? Latency or unstable connections? We got it. Just press "play" again and the download will resume from where it stopped
@@ -89,7 +111,9 @@ While many of our ethical features are still actively being developed behind the
 *   **Incomplete-download guard:** truncated archives are detected before extraction, kept resumable, and never offered as if they were complete.
 *   **Auto-Extraction & Installation:** Games are downloaded, automatically extracted, and neatly placed into your designated "Game Libraries".
 
+<a id="features-stats"></a>
 ### Stats & Achievements
+
 *   **Stats overview:** real local data for hours, sessions, streaks, Entertainment Yield (hours played per dollar of reference price), library value, developers, publishers and genres.
 *   **Charts:** 52-week activity heatmap, hours by time of day and weekday, session lengths, genre donut, top developers and a highest/lowest Entertainment Yield ranking.
 *   **Per-game browser:** searchable and sortable library with covers, selected-game metrics, playtime chart and a rotating advice banner.
@@ -97,35 +121,43 @@ While many of our ethical features are still actively being developed behind the
 *   **Achievement popup:** full-window dimmed overlay with the large icon, status/date and progress; close with Esc or a click outside the card.
 *   **No progress fuss:** unlocks are idempotent, progress is recalculated from real library data, and there is no destructive reset button in the UI.
 
-
+<a id="features-library"></a>
 ### Advanced Library Management
+
 *   **Orphan Recovery:** Found an old folder? The launcher can automatically scan it, fetch the correct metadata from the web, and populate it into your library.
 *   **Update Checker:** Compares your local game version against the web version. If a new update is available, it notifies you and helps you download the games directly (no patch files supported now, unless specified by the host game's page)
 *   **Digital Store Links:** Automatically grabs official Steam and GOG store links so you can check out the official pages.
 *   **Steam Sales Mirror:** You got that game in your library. It's SO GOOD! And the devs? You heard great about them. We'll let you know when that piece of art is for sale on **STEAM** and/or **GOG** (nope, F* off Epic)
 *   **Gold Tier:** Games from known Software Houses, verified by the community, in which you can rely forever. Non Toxic, Non Predatory, Quality made games that deserves a spotlight
 
+<a id="features-savegames"></a>
 ### Savegames Manager
+
 *   **Ludusavi Integration:** Automatically fetches game informations to locate exactly where your game saves are stored, both for Windows and Linux (Proton) prefixes.
 *   **Automated Backups:** Set a sync interval or let the launcher do the work. The built-in **Process Monitor** detects when you close a game and immediately backs up your latest save securely.
-*   **Versioning:** Keeps a rotating history of your last 3 save snapshots, so you can always roll back if your file gets corrupted.
+*   **Versioned snapshots:** a rotating history per game (default 5, configurable), each one with version, reason, device and date.
+*   **Safe restore:** snapshots the current saves before restoring, swaps atomically, rolls back on failure and refuses unsafe destinations.
+*   **Mirror:** copies the backups incrementally to a second folder (another drive, a network share, a Syncthing/Drive folder) and never deletes anything.
+*   **Launcher data backup:** achievements, stats and preferences are backed up too, and restores are additive (local data wins).
 
+<a id="features-steam"></a>
 ### Steam Integration & Linux/Deck Support
+
 *   **One-Click Steam Injection:** Add your non-Steam games directly into your Steam Library with a single click.
 *   **Add All to Steam:** a single Library-menu action adds every installed game that is still missing a shortcut, closing and restarting Steam only once.
 *   **Automated Artwork:** The launcher downloads and applies Covers, Heroes, and Logos to your Steam Library entries dynamically!
 *   **Proton Ready:** On Linux/Steam Deck, the launcher automatically configures Steam shortcuts to use `Proton GE` or `Proton Experimental`, getting you ready to play immediately.
 
----
-
-
-## Getting Started & Setup
+<a id="getting-started"></a>
+## Getting started
 
 1.  **First-run wizard:** choose the data/cache folder and at least one **Game Library** (e.g. `C:\Games`, `L:\AeThiccLibrary` or `/home/deck/Games`). The launcher scans libraries for installed games and uses the default one for new downloads/extractions. You can re-run the wizard from **Settings → Run setup wizard**.
 2.  **Configure Save Sync Folder:** In the settings, designate a folder where your savegame backups will be stored (default no forced designation, it has a default path OS based)
 3.  **Search & Play:** Go to the Explorer tab, type a game name or paste a VALID URL (wink wink), hit Enter, and let the launcher do the heavy lifting!
 
-### Optional API keys (SteamGridDB / IGDB)
+<a id="api-keys"></a>
+## Optional API keys (SteamGridDB / IGDB)
+
 The launcher works without any API key. If you want the extra metadata:
 
 - **SteamGridDB** (grids, heroes, logos): create a personal key from your SteamGridDB profile and paste it in the first-run wizard or **Settings → API Keys**.
@@ -133,7 +165,9 @@ The launcher works without any API key. If you want the extra metadata:
 
 Keys are stored in the OS keychain (Windows Credential Manager / Secret Service on Linux); if the keychain is unavailable, the launcher falls back to a protected file in its data folder. Keys are never written to `config.json` and never logged. Changes in Settings are applied after a restart.
 
-### ffmpeg on Linux (trailer seeking)
+<a id="ffmpeg"></a>
+## ffmpeg on Linux (trailer seeking)
+
 Trailers play out of the box. To also get smooth seeking on Linux, install `ffmpeg` with your distribution's package manager:
 
 | Distribution | Command |
@@ -149,9 +183,9 @@ On **Windows** nothing is needed: the launcher bundles what it requires.
 
 In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `ffmpeg` is available there, otherwise the trailer streams normally without seeking.
 
----
+<a id="technical-notes"></a>
+## Technical notes for power users
 
-## Technical Notes for Power Users
 *   **Metadata:** Game metadata is stored locally inside each game's folder in a `steamrip_meta.json` file. You can back up your games just by moving the folder; the launcher will recognize them instantly on the next scan.
 *   **Data & seed:** the `data/`, `bin/`, `.media/`, `_internal/` and `lists/` folders next to the executable are implementation details and hidden in the installer. They are seeds: definitions, icons, phrase packs and the posts index are copied into the data root chosen in the first-run wizard, and the launcher reads them only from there.
 *   **API keys:** stored in the OS keychain or the encrypted fallback file. They are never written to `config.json` or logs.
@@ -159,68 +193,12 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 *   **Network Drops:** The smart downloader supports resume functionality. If your connection drops, it will automatically attempt to resume up to 10 times. Results may vary depending on hosts.
 *   **Trailers:** the first time a trailer is opened it is prepared in a local cache so seeking is instant and repeat views start immediately. On Windows the needed tool is bundled; on Linux install `ffmpeg` (see above) to enable seeking.
 
----
+<a id="upcoming"></a>
+## Upcoming
 
-## What's New in Version 1.9.5?
+*   **Cloud Saves Sync**: Having your games saved on the cloud (your own personal GDrive or similar) will make things twice as easy once you format, or move on with different games. The local backup, mirror and restore flows already share the backend that a remote provider will plug into.
 
-### Discovery
-- **Recently Added**, **Recently Updated** and the SteamRIP categories now put the newest games first and actually refresh: the first page is a snapshot of the site, re-checked while the launcher is open and when you come back to the tab.
-- **Recently Updated** now shows the same list as SteamRIP's *Recently Updated* page, previous days included, instead of unrelated posts whose modification date changed.
-- **New Releases** no longer shows placeholder dates years in the future, and **Trending** follows the last 12 months instead of the all-time hype list.
-- A shelf that matches only a few games keeps loading pages instead of stopping at four cards.
+<a id="changelog"></a>
+## Changelog
 
-### Savegames
-- **Save paths** use a single versioned schema; rescanning no longer deletes a hand-typed path; the Linux compatdata path is always rebuilt from the portable Windows path, including games in a secondary Steam library.
-- **Backups** are atomic, deduplicated, configurable per game (default 5 snapshots), and every snapshot records version, reason, device and date. In-place SteamRIP updates take a pre-update snapshot labeled with the replaced build.
-- **Restore** shows date/build/type for every snapshot, refuses unsafe destinations, snapshots the current saves first, rolls back a failed swap and warns on version mismatches.
-- **Mirror** your backups incrementally to a second folder (other drive, network share, Syncthing/Drive); nothing is ever deleted, and the old "Sync Folder" setting becomes the mirror folder.
-- **Launcher data backup** covers achievements, stats and preferences automatically, with additive restores from Settings.
-- **Linux save paths** are fixed for games missing from the Ludusavi manifest.
-
-### Stats
-- **Entertainment Yield**: ranking by `hours played ÷ reference price` (`h/$`) instead of value per hour, so deep sales no longer dominate. Free or unpriced games show `N/A`.
-
-### Downloads and Achievements
-- The download queue restarts from an empty/paused state, auto-advances after extraction, failure or stop, and never starts during an extraction.
-- A first run imports achievement history silently, and toasts stay in the bottom-right corner when the window is maximized.
-
-### Linux and packaging
-- Emoji icons render again (bundled Noto Emoji), the app icon ships in all hicolor sizes, Wayland gets the desktop file name, and the Flatpak build copies assets from a clean folder.
-
-## What's New in Version 1.9.4?
-
-### Discovery
-- In the game sheet, a title already in your library now shows **Play**, **Set Executable** or **Add to Steam** instead of **Install**, using the same Windows and Linux/Flatpak flows as the Explorer rail.
-- Playtime sits next to the action buttons; the sheet grows only when the optional **Add to Steam** row is needed.
-- On Linux/Flatpak, **Add to Steam** automatically asks for the wrapper and the executable when they are missing.
-
-### Downloads
-- Incomplete downloads and pending extractions are listed in the Downloads tab with state, provider and progress instead of opening popups at startup.
-- The active item stays pinned on top; every row can start, resume or extract, and an interrupted extraction remains recoverable.
-- Dismissing an archive is persistent, and the queue header links to the temporary folder and cache cleanup. The queue state is stored in a hidden file.
-
-## What's New in Version 1.9.3?
-
-### Fixed
-- **GoFile** single-file links download again; folder links also handle nested subfolders and pagination.
-- **MegaDB** updated to the new site flow (`megadb.net` download token), so large files no longer stop with a `curl: (28) Operation timed out` error.
-- **Downloads**: a connection that stalls for about two minutes is now detected and resumed automatically.
-
-## What's New in Version 1.9.2?
-
-### Explorer restyle (glass UI)
-- New Explorer look: glass panels over a blurred background taken from the game's featured image, with a responsive right rail (cover, quick links, Play).
-- Background blur is adjustable in **Settings** (0–100); 0 is already a light blur.
-- **System Requirements** and **Game Info** are now icon + value grids, with a fallback to the old list when the page markup is unusual.
-- Wider library sidebar (`LIBRARY` + search in one panel), more compact status dots.
-- **Version status** starts collapsed and expands over the header.
-- Glass context menus; the browser menu on the cover and on scrollbars is disabled.
-- Text contrast adapts to the background image, so custom themes stay readable.
-
-## What's New in Version 1.9.1?
-
-### Fixed
-- Launching a game that is already in Steam now goes **through Steam**, so the Steam overlay, Steam Game Recording and playtime tracking work again. Games that are not in Steam still launch directly.
-- If the stored Steam shortcut ID is missing, it is recovered from Steam instead of starting the game outside of it.
-
----
+Every release — with the full list of changes, notes and downloads — lives in **[CHANGELOG.md](CHANGELOG.md)** and on the **[GitHub Releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases)**.
