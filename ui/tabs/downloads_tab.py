@@ -30,6 +30,18 @@ from ui.widgets.queue_items import (
     SectionHeaderWidget,
 )
 
+def can_auto_start(active_worker, is_extracting, current_task, is_paused) -> bool:
+    """Whether a queued download may start without a user action.
+
+    ``is_paused`` describes a paused *current* task only. A leftover flag on an
+    idle queue must never block the next download, otherwise adding a link to
+    an empty queue does nothing until the app restarts.
+    """
+    if active_worker is not None or is_extracting:
+        return False
+    return not (current_task is not None and is_paused)
+
+
 class DownloadManagerTab(QWidget):
     progress_updated = pyqtSignal(int, float, float)
     download_started = pyqtSignal(str)
@@ -873,15 +885,15 @@ class DownloadManagerTab(QWidget):
             if existing is self.current_task:
                 if self.is_paused and not self.active_worker and not self.is_extracting:
                     self.resume_current()
-            elif auto_start and not self.active_worker and not self.is_paused:
+            elif auto_start and self._can_auto_start():
                 self._process_queue()
             return
 
         self.queue.append(task_dict)
         self._rebuild_list_ui()
         self.save_state()
-        
-        if auto_start and not self.active_worker and not self.is_paused:
+
+        if auto_start and self._can_auto_start():
             self._process_queue()
 
     def _rebuild_list_ui(self):
@@ -1169,6 +1181,21 @@ class DownloadManagerTab(QWidget):
         self._rebuild_list_ui()
         self.save_state()
 
+    def _can_auto_start(self) -> bool:
+        """Whether a queued task may start without a user action."""
+        return can_auto_start(
+            self.active_worker,
+            self.is_extracting,
+            self.current_task,
+            self.is_paused,
+        )
+
+    def _advance_queue(self):
+        """Start the next queued task after the current one ended."""
+        if not self._can_auto_start():
+            return
+        self._process_queue(auto_start=True)
+
     def _process_queue(self, auto_start=True):
         if not self.queue and not self.current_task:
             self._set_empty_state()
@@ -1180,7 +1207,8 @@ class DownloadManagerTab(QWidget):
             if not auto_start:
                 self._set_empty_state()
                 self._rebuild_list_ui()
-                self.queue_empty.emit()
+                if not self.queue:
+                    self.queue_empty.emit()
                 return
             self.current_task = self.queue.pop(0)
             self._rebuild_list_ui()
@@ -1337,7 +1365,7 @@ class DownloadManagerTab(QWidget):
         self._cleanup_worker()
         self.current_task = None
         self.is_paused = False
-        self._process_queue(auto_start=False)
+        self._advance_queue()
     
     def _show_history_context_menu(self, pos):
         from PyQt6.QtWidgets import QMenu
@@ -1619,7 +1647,7 @@ class DownloadManagerTab(QWidget):
         self.is_paused = False
         self._rebuild_list_ui()
         self.save_state()
-        self._process_queue(auto_start=False)
+        self._advance_queue()
 
     def add_pending_extraction(self, archive_path, task_data):
         """Salva un download completato che attende ancora estrazione."""
@@ -1763,7 +1791,7 @@ class DownloadManagerTab(QWidget):
         self.current_task = None
         self.download_error.emit(err_msg)
         self.save_state()
-        self._process_queue(auto_start=False)
+        self._advance_queue()
 
     def mark_current_partial(self, final_path):
         """Keep a truncated archive visible as a resumable partial download."""
@@ -1779,7 +1807,9 @@ class DownloadManagerTab(QWidget):
             pass
         self.queue.insert(0, task)
         self.current_task = None
-        self.is_paused = True
+        # is_paused only describes a paused current task; the partial is now a
+        # queue row and starts from its play button (or the next auto-start).
+        self.is_paused = False
         self._set_empty_state()
         self._rebuild_list_ui()
         self.save_state()
@@ -1888,7 +1918,9 @@ class DownloadManagerTab(QWidget):
             self.pending_extractions = filtered_pending
             self.queue = all_tasks
             self.current_task = None
-            self.is_paused = True
+            # Nothing starts automatically: the queue model picks the next row
+            # and auto-start is only blocked while a *current* task is paused.
+            self.is_paused = False
             self.is_extracting = False
             self.current_extraction_id = None
             self._extraction_started = False

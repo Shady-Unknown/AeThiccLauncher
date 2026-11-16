@@ -5,7 +5,7 @@ enrichment and the Steam stats cache). It never touches the network and never
 writes files. That keeps it cheap enough to rebuild the snapshot after a game
 session or a price refresh.
 
-``plan.md`` §8 defines the metrics; this module implements the S1 subset
+``plans/roadmap.md`` §8 defines the metrics; this module implements the S1 subset
 (hero, per-game, developers/publishers, genres, timeline and finance).
 """
 from __future__ import annotations
@@ -224,13 +224,27 @@ class StatsManager:
             cents = parse_price_to_cents(data.get("final_price"))
         if cents is None:
             return None
+        on_sale = bool(data.get("on_sale"))
+        # Reference price = the ordinary (non-discounted) price. A 90% sale
+        # must not inflate the entertainment yield.
+        reference = data.get("initial_cents")
+        if reference is None:
+            reference = parse_price_to_cents(data.get("initial_price"))
+        reference = _int(reference) if reference is not None else None
+        if not reference:
+            reference = None
+        if reference is None and not on_sale:
+            reference = int(cents)
+        if reference is not None and reference <= 0:
+            reference = None
         currency = data.get("currency") or detect_currency(data.get("final_price", ""))
         return {
             "cents": int(cents),
+            "reference_cents": reference,
             "currency": currency or "USD",
             "store": store,
             "region": region,
-            "on_sale": bool(data.get("on_sale")),
+            "on_sale": on_sale,
             "discount_percent": _int(data.get("discount_percent")),
         }
 
@@ -513,6 +527,13 @@ class StatsManager:
             )
             backup = self._backup_for(title)
             hours_total = total / 3600.0
+            reference_cents = price.get("reference_cents") if price else None
+            if reference_cents is not None and reference_cents <= 0:
+                reference_cents = None
+            yield_value = (
+                hours_total / (reference_cents / 100.0)
+                if reference_cents and hours_total > 0 else None
+            )
             games.append({
                 "title": title,
                 "installed": bool(meta),
@@ -529,6 +550,10 @@ class StatsManager:
                 "price_currency": price["currency"] if price else "",
                 "price_store": price["store"] if price else "",
                 "price_on_sale": bool(price.get("on_sale")) if price else False,
+                "reference_cents": reference_cents,
+                "reference_currency": price["currency"] if price else "",
+                "reference_store": price["store"] if price else "",
+                "yield_hours_per_dollar": yield_value,
                 "cost_per_hour": (
                     (price["cents"] / 100.0) / hours_total
                     if price is not None and hours_total > 0 else None
@@ -566,6 +591,12 @@ class StatsManager:
         known_hours = sum(g["hours_total"] for g in played_known)
         known_value = sum(g["price_cents"] for g in played_known)
         avg_cost_per_hour = (known_value / 100.0 / known_hours) if known_hours > 0 else None
+
+        # Entertainment yield: hours played per dollar of reference price.
+        priced_played = [g for g in games if g.get("reference_cents") and g["hours_total"] > 0]
+        yield_hours = sum(g["hours_total"] for g in priced_played)
+        yield_reference = sum(g["reference_cents"] for g in priced_played)
+        avg_yield = (yield_hours / (yield_reference / 100.0)) if yield_reference > 0 else None
 
         installed_games = [g for g in games if g["installed"]]
         library_value = sum(g["price_cents"] for g in installed_games if g["price_cents"] is not None)
@@ -637,6 +668,7 @@ class StatsManager:
                     } if longest else None
                 ),
                 "avg_cost_per_hour": avg_cost_per_hour,
+                "avg_yield": avg_yield,
                 "library_value_cents": library_value,
                 "current_streak": current_streak,
                 "best_streak": best_streak,

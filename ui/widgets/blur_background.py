@@ -152,7 +152,13 @@ class BlurredBackground(QObject):
         """
         candidate = path if path and os.path.isfile(path) else ""
         if not candidate:
-            candidate = splash_path()
+            splash = splash_path()
+            if not os.path.isfile(splash):
+                print(f"[Background] splash screen missing: {splash}")
+                self._source_path = ""
+                self._host.update()
+                return
+            candidate = splash
         if candidate == self._source_path and self._image is not None:
             return
         self._source_path = candidate

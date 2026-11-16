@@ -20,6 +20,9 @@ ENRICHMENT_FIELDS = {
     "gold_tier",
 }
 
+#: Sentinel: ``set_version_status`` removes a key instead of storing a value.
+CLEAR = object()
+
 
 class MasterCatalog(QObject):
     def __init__(self, db_path, parent=None):
@@ -278,13 +281,19 @@ class MasterCatalog(QObject):
     # --- Version Status (build SteamRIP vs Steam) ---
 
     def set_version_status(self, title, payload):
-        """Salva/aggiorna i dati del widget Version Status (lato sito)."""
+        """Salva/aggiorna i dati del widget Version Status (lato sito).
+
+        Un valore vuoto in ``payload`` cancella la chiave corrispondente: un
+        build id vecchio non deve sopravvivere a un refresh che riporta meno
+        dati (pagina migrata allo standard "solo versione", widget sparito).
+        Usare ``CLEAR`` per essere espliciti o quando il valore non va salvato.
+        """
         if not isinstance(payload, dict) or not payload:
             return
         merged = dict(self.get_version_status(title))
         for key, value in payload.items():
-            if value in (None, "", [], {}):
-                merged.setdefault(key, value)
+            if value is CLEAR or value in (None, "", [], {}):
+                merged.pop(key, None)
                 continue
             merged[key] = value
         merged["site_checked_at"] = time.time()

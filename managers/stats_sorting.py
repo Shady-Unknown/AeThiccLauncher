@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 
-from core.price_utils import format_cents
 
 DEFAULT_SORT_KEY = "installed_first"
 
@@ -18,49 +17,49 @@ SORT_OPTIONS = (
         "key": "installed_first",
         "label": "Installed first",
         "primary": "hours",
-        "secondary": ("value", "sessions"),
+        "secondary": ("yield", "sessions"),
     },
     {
         "key": "playtime_desc",
         "label": "Playtime \u2193",
         "primary": "hours",
-        "secondary": ("value", "sessions"),
+        "secondary": ("yield", "sessions"),
     },
     {
         "key": "playtime_asc",
         "label": "Playtime \u2191",
         "primary": "hours",
-        "secondary": ("value", "sessions"),
+        "secondary": ("yield", "sessions"),
     },
     {
-        "key": "value_best",
-        "label": "Best value / h",
-        "primary": "value",
+        "key": "yield_best",
+        "label": "Highest Yield",
+        "primary": "yield",
         "secondary": ("hours", "sessions"),
     },
     {
-        "key": "value_worst",
-        "label": "Worst value / h",
-        "primary": "value",
+        "key": "yield_worst",
+        "label": "Lowest Yield",
+        "primary": "yield",
         "secondary": ("hours", "sessions"),
     },
     {
         "key": "sessions_desc",
         "label": "Sessions \u2193",
         "primary": "sessions",
-        "secondary": ("hours", "value"),
+        "secondary": ("hours", "yield"),
     },
     {
         "key": "last_played_desc",
         "label": "Last played \u2193",
         "primary": "last_played",
-        "secondary": ("hours", "value"),
+        "secondary": ("hours", "yield"),
     },
     {
         "key": "title_asc",
         "label": "Title A\u2013Z",
         "primary": "hours",
-        "secondary": ("value", "sessions"),
+        "secondary": ("yield", "sessions"),
     },
 )
 
@@ -117,8 +116,8 @@ def _last_played(game):
     return _int(game.get("last_played"))
 
 
-def _cost(game):
-    value = game.get("cost_per_hour")
+def _yield(game):
+    value = game.get("yield_hours_per_dollar")
     return None if value is None else _float(value)
 
 
@@ -137,21 +136,21 @@ def sort_games(games, sort_key=DEFAULT_SORT_KEY):
         )
     if key == "playtime_asc":
         return sorted(games, key=lambda game: (_hours(game), _title(game)))
-    if key == "value_best":
+    if key == "yield_best":
         return sorted(
             games,
             key=lambda game: (
-                _cost(game) is None,
-                _cost(game) if _cost(game) is not None else 0.0,
+                _yield(game) is None,
+                -(_yield(game) if _yield(game) is not None else 0.0),
                 _title(game),
             ),
         )
-    if key == "value_worst":
+    if key == "yield_worst":
         return sorted(
             games,
             key=lambda game: (
-                _cost(game) is None,
-                -(_cost(game) if _cost(game) is not None else 0.0),
+                _yield(game) is None,
+                _yield(game) if _yield(game) is not None else 0.0,
                 _title(game),
             ),
         )
@@ -168,8 +167,8 @@ def sort_games(games, sort_key=DEFAULT_SORT_KEY):
 def metric_value(game, metric):
     if metric == "hours":
         return _hours(game)
-    if metric == "value":
-        return _cost(game)
+    if metric == "yield":
+        return _yield(game)
     if metric == "sessions":
         return _sessions(game)
     if metric == "last_played":
@@ -183,13 +182,6 @@ def bar_context(games, metric, now=None):
     games = [game for game in (games or []) if isinstance(game, dict)]
     values = [metric_value(game, metric) for game in games]
 
-    if metric == "value":
-        positive = [value for value in values if value is not None and value > 0]
-        return {
-            "metric": metric,
-            "min_positive": min(positive) if positive else None,
-            "now": now,
-        }
     if metric == "last_played":
         ages = [now - value for value in values if value and value > 0]
         return {
@@ -211,13 +203,6 @@ def _clamp(value):
 
 def bar_ratio(game, metric, context):
     value = metric_value(game, metric)
-    if metric == "value":
-        if value is None:
-            return 0.0
-        if value <= 0:
-            return 1.0
-        minimum = context.get("min_positive")
-        return _clamp((minimum / value) if minimum else 0.0)
     if metric == "last_played":
         if not value or value <= 0:
             return 0.0
@@ -251,18 +236,18 @@ def relative_age(timestamp, now=None):
     return f"{days // 365}y ago"
 
 
-def _currency(game):
-    return str(game.get("price_currency") or "USD")
+def format_yield(value) -> str:
+    """``1.25 h/$`` for an entertainment yield value."""
+    if value is None:
+        return "\u2014"
+    return f"{float(value):.2f} h/$"
 
 
 def format_primary_value(game, metric, now=None):
     if metric == "hours":
         return f"{_hours(game):.1f}h"
-    if metric == "value":
-        value = _cost(game)
-        if value is None:
-            return "\u2014"
-        return format_cents(int(round(value * 100)), _currency(game)) + "/h"
+    if metric == "yield":
+        return format_yield(_yield(game))
     if metric == "sessions":
         return str(_sessions(game))
     if metric == "last_played":
@@ -275,12 +260,10 @@ def format_secondary_values(game, spec, now=None):
     for metric in spec.get("secondary", ()):
         if metric == "hours":
             values.append(f"{_hours(game):.1f}h")
-        elif metric == "value":
-            value = _cost(game)
+        elif metric == "yield":
+            value = _yield(game)
             if value is not None:
-                values.append(
-                    format_cents(int(round(value * 100)), _currency(game)) + "/h"
-                )
+                values.append(format_yield(value))
         elif metric == "sessions":
             values.append(f"{_sessions(game)} sess")
         elif metric == "last_played":

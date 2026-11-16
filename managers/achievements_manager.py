@@ -34,6 +34,8 @@ def _read_state(path: Path):
     return {
         "schema": 1,
         "reset_at": int(data.get("reset_at") or 0),
+        "seeded": bool(data.get("seeded")),
+        "seeded_at": int(data.get("seeded_at") or 0),
         "unlocked": data.get("unlocked") if isinstance(data.get("unlocked"), dict) else {},
         "progress": data.get("progress") if isinstance(data.get("progress"), dict) else {},
     }
@@ -75,6 +77,9 @@ class AchievementsManager(QObject):
         self._state = _read_state(self._state_path)
         self._stats = {}
         self._pending_events = []
+        # Events are buffered until start(): the first evaluation must see the
+        # whole session instead of emitting one toast per early event.
+        self._started = False
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)
@@ -95,11 +100,34 @@ class AchievementsManager(QObject):
             )
 
     def start(self):
-        self.evaluate(retroactive=True)
+        """Single retroactive pass; a brand-new state is seeded silently.
+
+        On a first run every already-true condition would otherwise be
+        announced as "just unlocked", which looks like a bug (badges popping up
+        over the Discovery tab). History is imported without notifications.
+        """
+        self._started = True
+        self._timer.stop()
+        self._pending_events = []
+        first_seed = not self._state.get("seeded") and not self._state.get("unlocked")
+        self.evaluate(retroactive=True, silent=first_seed)
+        if not self._state.get("seeded"):
+            self._state["seeded"] = True
+            self._state["seeded_at"] = int(self._clock())
+            _write_state(self._state_path, self._state)
+
+    def reload(self):
+        """Reload state from disk, e.g. after restoring a launcher backup."""
+        self._state = _read_state(self._state_path)
+        self._pending_events = []
+        self._stats = {}
+        self.state_changed.emit()
+        return self.evaluate()
 
     def _on_event(self, name, payload):
         self._pending_events.append((name, dict(payload or {})))
-        self._timer.start()
+        if self._started:
+            self._timer.start()
 
     # ------------------------------------------------------------------ public
 
@@ -150,7 +178,7 @@ class AchievementsManager(QObject):
             now=int(self._clock()),
         )
 
-    def evaluate(self, retroactive=False):
+    def evaluate(self, retroactive=False, silent=False):
         stats = self._current_stats()
         self._stats = stats
         events = (
@@ -185,10 +213,11 @@ class AchievementsManager(QObject):
         self._state["unlocked"] = unlocked
         _write_state(self._state_path, self._state)
         badges = [self.badge_for(definition, stats) for definition in newly]
-        if retroactive and len(badges) > 3:
-            self.retroactive_unlocked.emit(badges)
-        else:
-            for badge in badges:
-                self.achievement_unlocked.emit(badge)
+        if not silent:
+            if retroactive and len(badges) > 1:
+                self.retroactive_unlocked.emit(badges)
+            else:
+                for badge in badges:
+                    self.achievement_unlocked.emit(badge)
         self.state_changed.emit()
         return badges

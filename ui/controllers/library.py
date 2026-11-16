@@ -194,7 +194,13 @@ class LibraryController:
         self.clear_links()
         title = meta.get('title') or os.path.basename(str(meta.get('install_dir') or ''))
 
-        sync_folder = self.app_config.get('savegames', {}).get('sync_folder', '')
+        sync_folder = ""
+        manager = getattr(self, 'savegames_manager', None)
+        if manager is not None:
+            try:
+                sync_folder = manager.get_sync_folder()
+            except Exception:
+                sync_folder = ""
         cover = MiniCoverManager.resolve_cover_path(title, self.installed_games, sync_folder)
         cover_urls = [cover] if cover else []
 
@@ -536,7 +542,7 @@ class LibraryController:
                 self._update_desc_custom_save_path(meta)
 
     def _get_game_backup_folder(self, raw_title):
-        sync_folder = self.app_config.get('savegames', {}).get('sync_folder', '').strip()
+        sync_folder = self.savegames_manager.get_sync_folder()
         if not sync_folder:
             return ""
         safe_title = safe_game_folder_name(raw_title)

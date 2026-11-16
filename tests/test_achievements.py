@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -263,6 +264,17 @@ class AchievementsManagerTests(unittest.TestCase):
         self.assertTrue(hidden["hidden_locked"])
         self.assertFalse(hidden["unlocked"])
 
+    def test_reload_reads_state_from_disk(self):
+        self.manager.evaluate(retroactive=True)
+        path = self.manager._state_path
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.setdefault("unlocked", {})["external-id"] = {"at": NOW}
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        self.manager.reload()
+
+        self.assertIn("external-id", self.manager.state.get("unlocked", {}))
+
     def test_icon_path_and_progress_badge(self):
         stat_def = self.definitions[0]
         badge = self.manager.badge_for(stat_def, stats={"hours_total": 0.5})
@@ -276,6 +288,84 @@ class AchievementsManagerTests(unittest.TestCase):
         self.assertEqual(len(definitions), 40)
         self.assertEqual(len({item["id"] for item in definitions}), 40)
         self.assertTrue(all(item.get("icon") for item in definitions))
+
+
+class FirstLaunchSeedTests(unittest.TestCase):
+    """A brand-new install must not announce history as fresh unlocks."""
+
+    DEFINITIONS = [
+        {
+            "id": "stat_hours", "title": "Hours",
+            "trigger": {"stat": "hours_total", "op": ">=", "value": 1},
+        },
+        {
+            "id": "event_linux", "title": "Linux",
+            "trigger": {"event": "launcher_start", "where": {"os": "linux"}},
+        },
+        {
+            "id": "later", "title": "Later",
+            "trigger": {"stat": "hours_total", "op": ">=", "value": 10},
+        },
+    ]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = StateStore(base_dir=Path(self.tmp.name))
+        self.state.usage.append({
+            "id": "u1", "event": "launcher_start", "os": "linux",
+            "flatpak": False, "at": _ts(0),
+        })
+        self.snapshot = {"hero": {"hours_total": 3.0}, "games": []}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _manager(self):
+        manager = AchievementsManager(
+            state_store=self.state,
+            installed_games={},
+            stats_provider=lambda: self.snapshot,
+            config={"stats": {"cinema_rate": 6.0}},
+            definitions=self.DEFINITIONS,
+            base_dir=Path(self.tmp.name),
+            clock=lambda: NOW,
+        )
+        self.single = []
+        self.summaries = []
+        manager.achievement_unlocked.connect(self.single.append)
+        manager.retroactive_unlocked.connect(self.summaries.append)
+        return manager
+
+    def test_first_start_seeds_without_notifications(self):
+        manager = self._manager()
+        manager.start()
+
+        self.assertEqual(self.single, [])
+        self.assertEqual(self.summaries, [])
+        self.assertEqual(manager.unlocked_count(), 2)
+        data = json.loads(manager._state_path.read_text(encoding="utf-8"))
+        self.assertTrue(data.get("seeded"))
+        self.assertIn("stat_hours", data.get("unlocked", {}))
+
+    def test_second_launch_does_not_reannounce(self):
+        self._manager().start()
+        manager = self._manager()
+        manager.start()
+
+        self.assertEqual(self.single, [])
+        self.assertEqual(self.summaries, [])
+        self.assertEqual(manager.unlocked_count(), 2)
+
+    def test_real_unlock_after_the_seed_still_toasts(self):
+        manager = self._manager()
+        manager.start()
+        self.snapshot["hero"]["hours_total"] = 12.0
+
+        badges = manager.evaluate()
+
+        self.assertEqual({badge["id"] for badge in badges}, {"later"})
+        self.assertEqual([badge["id"] for badge in self.single], ["later"])
+        self.assertEqual(self.summaries, [])
 
 
 if __name__ == "__main__":

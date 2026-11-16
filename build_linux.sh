@@ -125,15 +125,21 @@ header "Copy Assets into $FLATPAK_DIR/"
 SECONDS=0
 cp "dist/$APP_NAME" "$FLATPAK_DIR/$APP_NAME"
 info "Copied $APP_NAME"
+# `cp -r src dest` nests into an existing dest: wipe first so a stale .media
+# (missing icons/, new fonts) can never be shipped.
+rm -rf "$FLATPAK_DIR/.media"
 cp -r .media "$FLATPAK_DIR/.media"
 info "Copied .media/"
+rm -rf "$FLATPAK_DIR/bin"
 cp -r bin   "$FLATPAK_DIR/bin"
 info "Copied bin/"
 if [ -d data ]; then
+    rm -rf "$FLATPAK_DIR/data"
     cp -r data "$FLATPAK_DIR/data"
     info "Copied data/ (shipped definitions and indexes)"
 fi
 if [ -d lists ]; then
+    rm -rf "$FLATPAK_DIR/lists"
     cp -r lists "$FLATPAK_DIR/lists"
     info "Copied lists/ (gold tier seeds)"
 fi

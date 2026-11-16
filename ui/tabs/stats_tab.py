@@ -33,8 +33,8 @@ from core.mini_cover_cache import MiniCoverManager
 from core.price_utils import format_cents
 from managers.stats_phrases import StatsPhrases
 from managers.stats_sorting import (
-    DEFAULT_SORT_KEY, SORT_OPTIONS, filter_games, normalize_sort_key,
-    sort_games,
+    DEFAULT_SORT_KEY, SORT_OPTIONS, filter_games, format_yield,
+    normalize_sort_key, sort_games,
 )
 from ui.widgets.charts import (
     AreaLineChart, CalendarHeatmap, GameBarList, GenreDonut,
@@ -96,7 +96,7 @@ CARD_DEFINITIONS = (
     ("hours", "Hours played"),
     ("sessions", "Sessions"),
     ("games", "Games"),
-    ("cost", "Value per hour"),
+    ("yield", "Entertainment Yield"),
     ("value", "Library value"),
     ("streak", "Streak"),
     ("night", "Night owl"),
@@ -106,7 +106,7 @@ CARD_DEFINITIONS = (
 METRIC_DEFINITIONS = (
     ("hours", "Hours played"),
     ("sessions", "Sessions"),
-    ("cost", "Value per hour"),
+    ("yield", "Entertainment Yield"),
     ("last", "Last played"),
     ("genres", "Genres"),
     ("developer", "Developer"),
@@ -568,7 +568,7 @@ class StatsTab(QWidget):
         session_layout.addWidget(self.session_chart)
         grid.addWidget(self.session_panel, 3, 0)
 
-        self.value_panel, value_layout = self._panel("Best value per hour")
+        self.value_panel, value_layout = self._panel("Highest Yield")
         self.value_hint = QLabel("")
         self.value_hint.setObjectName("PanelHint")
         self.value_chart = HorizontalBarChart()
@@ -674,33 +674,31 @@ class StatsTab(QWidget):
         )
         self.session_hint.setText(range_label)
 
-        currency = self._currency(snapshot)
         priced = [
             game for game in (snapshot.get("games") or [])
-            if game.get("cost_per_hour") is not None
+            if game.get("yield_hours_per_dollar") is not None
             and float(game.get("hours_total") or 0) > 0
         ]
-        priced.sort(key=lambda game: float(game.get("cost_per_hour") or 0))
+        priced.sort(key=lambda game: -float(game.get("yield_hours_per_dollar") or 0))
         value_items = []
         if priced:
-            minimum = min(float(game.get("cost_per_hour") or 0) for game in priced) or 1.0
+            maximum = max(
+                float(game.get("yield_hours_per_dollar") or 0) for game in priced
+            ) or 1.0
             for game in priced[:10]:
-                cost = float(game.get("cost_per_hour") or 0)
-                display = format_cents(
-                    int(round(cost * 100)),
-                    game.get("price_currency") or currency,
-                ) + "/h"
+                value = float(game.get("yield_hours_per_dollar") or 0)
+                display = format_yield(value)
                 value_items.append({
                     "label": game.get("title") or "",
-                    "value": cost,
-                    "bar": (minimum / cost) if cost > 0 else 1.0,
+                    "value": value,
+                    "bar": (value / maximum) if maximum > 0 else 0.0,
                     "display": display,
                     "tooltip": f"{display} · {float(game.get('hours_total') or 0):.1f}h",
                 })
         self.value_chart.set_data(
             value_items, empty_text="No priced games yet"
         )
-        self.value_hint.setText("All time · best 10")
+        self.value_hint.setText("All time · top 10")
 
     # ------------------------------------------------------------------ events
 
@@ -813,10 +811,10 @@ class StatsTab(QWidget):
             f"{installed} / {len(games)}",
             f"{played} played · {never} never launched",
         )
-        cost = hero.get("avg_cost_per_hour")
-        self.cards["cost"].set_value(
-            format_cents(int(round(cost * 100)), currency) if cost is not None else "—",
-            "official price ÷ hours played",
+        avg_yield = hero.get("avg_yield")
+        self.cards["yield"].set_value(
+            format_yield(avg_yield),
+            "hours played ÷ reference price",
         )
         self.cards["value"].set_value(
             format_cents(int(hero.get("library_value_cents") or 0), currency),
@@ -952,7 +950,8 @@ class StatsTab(QWidget):
         imported = float(game.get("hours_imported") or 0)
         sessions = int(game.get("sessions") or 0)
         avg = game.get("avg_session_minutes")
-        cost = game.get("cost_per_hour")
+        yield_value = game.get("yield_hours_per_dollar")
+        reference = game.get("reference_cents")
         price = game.get("price_cents")
         last = int(game.get("last_played") or 0)
 
@@ -964,13 +963,15 @@ class StatsTab(QWidget):
         self.selected_metrics["sessions"][1].setText(
             f"avg {float(avg):.0f}m" if avg is not None else "no sessions yet"
         )
-        self.selected_metrics["cost"][0].setText(
-            format_cents(int(round(cost * 100)), currency)
-            if cost is not None else "—"
+        self.selected_metrics["yield"][0].setText(
+            format_yield(yield_value) if yield_value is not None else "N/A"
         )
-        self.selected_metrics["cost"][1].setText(
-            f"official {format_cents(price, currency)}"
-            if price is not None else "no official price"
+        reference_text = (
+            format_cents(int(reference), currency)
+            if reference is not None else "no reference price"
+        )
+        self.selected_metrics["yield"][1].setText(
+            f"{hours:.1f} hours played · {reference_text}"
         )
         self.selected_metrics["last"][0].setText(self._format_date(last))
         self.selected_metrics["last"][1].setText(
@@ -1023,9 +1024,13 @@ class StatsTab(QWidget):
     def _cover_for_game(self, game):
         title = str(game.get("title") or "")
         installed = getattr(self.app_window, "installed_games", {}) or {}
-        sync_folder = (self._config().get("savegames", {}) or {}).get(
-            "sync_folder", ""
-        )
+        sync_folder = ""
+        manager = getattr(self.app_window, "savegames_manager", None)
+        if manager is not None:
+            try:
+                sync_folder = manager.get_sync_folder()
+            except Exception:
+                sync_folder = ""
         try:
             local = MiniCoverManager.resolve_cover_path(
                 title, installed, sync_folder

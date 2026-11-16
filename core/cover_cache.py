@@ -121,25 +121,27 @@ class CoverCache:
         return path
 
     @staticmethod
-    def local_path_for(url):
+    def local_path_for(url, allow_placeholder=True):
         """Path locale dell'immagine (scarica e mette in cache se serve).
 
         Ritorna ``None`` se l'URL è vuoto o il download fallisce, così il
-        chiamante può ricadere su un asset locale (es. splash screen).
+        chiamante può ricadere su un asset locale (es. splash screen). Con
+        ``allow_placeholder=False`` un download fallito non restituisce il
+        segnaposto verticale (inutile come sfondo panoramico).
         """
         if not url:
             return None
         if url.startswith("file://"):
             path = CoverCache._local_path_from_url(url)
             return path if os.path.isfile(path) else None
-        local = CoverCache._cache_url(url)
+        local = CoverCache._cache_url(url, allow_placeholder=allow_placeholder)
         if not local or not local.startswith("file://"):
             return None
         path = CoverCache._local_path_from_url(local)
         return path if os.path.isfile(path) else None
 
     @staticmethod
-    def _cache_url(url):
+    def _cache_url(url, allow_placeholder=True):
         if not url or url.startswith("file://"):
             return url
 
@@ -163,6 +165,8 @@ class CoverCache:
         except Exception as e:
             print(f"[CoverCache] Download failed for {url}: {e}")
 
+        if not allow_placeholder:
+            return ""
         return CoverCache.placeholder_url()
 
     @staticmethod

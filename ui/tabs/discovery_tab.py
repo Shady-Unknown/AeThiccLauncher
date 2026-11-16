@@ -985,6 +985,13 @@ COVER_WINDOW_CARDS = 15
 
 class DiscoveryTab(QWidget):
 
+    #: Banner shown while the optional IGDB credentials are missing.
+    CONFIG_NOTICE_TITLE = "IGDB not configured"
+    CONFIG_NOTICE_BODY = (
+        "Trending and New Releases are hidden. Add your IGDB credentials "
+        "in Settings → API Keys (optional)."
+    )
+
     def __init__(self, main_window):
         super().__init__()
         self.mw = main_window
@@ -1041,12 +1048,7 @@ class DiscoveryTab(QWidget):
 
         self._recalc_layout()
         self._apply_theme()
-        if discovery is not None and not secrets.has_igdb_credentials():
-            self.show_config_notice(
-                "IGDB not configured",
-                "Trending and New Releases are hidden. Add your IGDB credentials "
-                "in Settings → API Keys (optional).",
-            )
+        self.refresh_config_notice()
         QTimer.singleShot(0, self._recalc_layout)
 
         if discovery is not None:
@@ -1175,6 +1177,7 @@ class DiscoveryTab(QWidget):
         self._notice_bar = QWidget()
         self._notice_bar.setVisible(False)
         self._notice_kind = None
+        self._dismissed_notices = set()
         self._notice_bar.setStyleSheet(
             "background: rgba(255, 180, 0, 0.10);"
             "border-bottom: 1px solid rgba(255, 180, 0, 0.45);"
@@ -1191,7 +1194,7 @@ class DiscoveryTab(QWidget):
             "QPushButton { background: transparent; color: #ffcc66;"
             " border: 1px solid #ffcc66; border-radius: 5px; padding: 3px 10px; }"
         )
-        btn.clicked.connect(self._notice_bar.hide)
+        btn.clicked.connect(self._dismiss_notice)
         row.addWidget(btn)
         root_layout.addWidget(self._notice_bar)
 
@@ -1223,13 +1226,39 @@ class DiscoveryTab(QWidget):
     def show_config_notice(self, title, body=""):
         self._show_notice("config", title, body)
 
-    def hide_network_notice(self):
-        if self._notice_kind != "network":
+    def refresh_config_notice(self):
+        """Show or hide the IGDB banner to match the saved credentials.
+
+        The banner used to be evaluated once, when the tab was built, so adding
+        the keys later left it on screen until a restart.
+        """
+        if self._discovery() is None:
+            return
+        if secrets.has_igdb_credentials():
+            self.hide_notice("config")
+            return
+        if "config" in self._dismissed_notices:
+            return
+        self.show_config_notice(
+            self.CONFIG_NOTICE_TITLE,
+            self.CONFIG_NOTICE_BODY,
+        )
+
+    def hide_notice(self, kind=None):
+        if kind is not None and self._notice_kind != kind:
             return
         if hasattr(self, "_notice_bar") and self._notice_bar.isVisible():
             self._notice_bar.hide()
             if hasattr(self, "_mask_overlay"):
                 QTimer.singleShot(0, self._layout_fades)
+
+    def hide_network_notice(self):
+        self.hide_notice("network")
+
+    def _dismiss_notice(self):
+        if self._notice_kind:
+            self._dismissed_notices.add(self._notice_kind)
+        self.hide_notice()
 
     def _watchdog_tick(self):
         now = time.monotonic()
@@ -1509,8 +1538,12 @@ class DiscoveryTab(QWidget):
     def _library_provider(self):
         games = self.mw.installed_games if hasattr(self.mw, 'installed_games') else {}
         sync_folder = ""
-        if hasattr(self.mw, 'app_config'):
-            sync_folder = self.mw.app_config.get('savegames', {}).get('sync_folder', '')
+        manager = getattr(self.mw, 'savegames_manager', None)
+        if manager is not None:
+            try:
+                sync_folder = manager.get_sync_folder()
+            except Exception:
+                sync_folder = ""
 
         cards = []
         for title in sorted(games.keys()):

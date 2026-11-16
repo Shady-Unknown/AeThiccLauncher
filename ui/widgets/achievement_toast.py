@@ -1,7 +1,7 @@
 """Small unlock toasts, queued bottom-right."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from ui.widgets.achievement_badge import badge_pixmap
@@ -99,6 +99,20 @@ class AchievementToastManager(QObject):
         self._max_visible = max(1, int(max_visible))
         self._visible = []
         self._queue = []
+        # The window can be maximized after the toasts appear: keep them glued
+        # to the bottom-right corner and above the tab content.
+        self._reposition_timer = QTimer(self)
+        self._reposition_timer.setInterval(400)
+        self._reposition_timer.timeout.connect(self._keep_on_top)
+        if parent is not None:
+            parent.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self._parent and event.type() in (
+            QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.Show
+        ):
+            self._position()
+        return False
 
     def show_badge(self, badge):
         self._enqueue(dict(badge or {}))
@@ -138,6 +152,8 @@ class AchievementToastManager(QObject):
             toast.show()
             toast.raise_()
             QTimer.singleShot(4800, toast.close)
+        if self._visible and not self._reposition_timer.isActive():
+            self._reposition_timer.start()
 
     def _on_closed(self, toast):
         if toast in self._visible:
@@ -145,6 +161,16 @@ class AchievementToastManager(QObject):
         toast.deleteLater()
         self._position()
         self._show_next()
+        if not self._visible and not self._queue:
+            self._reposition_timer.stop()
+
+    def _keep_on_top(self):
+        if not self._visible:
+            self._reposition_timer.stop()
+            return
+        for toast in self._visible:
+            toast.raise_()
+        self._position()
 
     def _position(self):
         parent = self._parent

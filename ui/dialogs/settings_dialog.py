@@ -1,6 +1,7 @@
 import copy
 import re
 import tempfile
+import time
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QListWidget, QStackedWidget, QVBoxLayout, QPushButton, QWidget, QFormLayout, QLineEdit, QFileDialog, QLabel, QSpinBox, QComboBox, QColorDialog, QCheckBox, QInputDialog, QMessageBox, QSlider
@@ -11,11 +12,14 @@ HEX_RE = re.compile(r'^#?[0-9a-fA-F]{6}$')
 
 class SettingsDialog(QDialog):
     config_saved = pyqtSignal(dict)
+    state_backup_requested = pyqtSignal()
+    state_restore_requested = pyqtSignal()
 
-    def __init__(self, current_config, parent=None):
+    def __init__(self, current_config, parent=None, state_backup_status=None):
         super().__init__(parent)
         self.setWindowTitle("Configuration Panel")
         self.resize(900, 640)
+        self._state_status = state_backup_status or {}
         self.config = copy.deepcopy(current_config)
         self.config.setdefault("themes", {})
         self.config.setdefault("current_theme", "PurpleRip")
@@ -307,14 +311,22 @@ class SettingsDialog(QDialog):
         layout = QFormLayout(page)
 
         from core.paths import PathManager
+        local_folder = QLabel(str(PathManager.get_staging_dir()))
+        local_folder.setWordWrap(True)
+        local_folder.setStyleSheet("color: #cba6d1; font-size: 11px;")
+        layout.addRow("Local backup folder:", local_folder)
+
         self.txt_sync_folder = QLineEdit(self.config.get('savegames', {}).get('sync_folder', ''))
-        self.txt_sync_folder.setPlaceholderText(str(PathManager.get_staging_dir()) + " (System Default)")
+        self.txt_sync_folder.setPlaceholderText("Optional: a second copy on another drive or a synced folder")
         btn_sync_folder = QPushButton("Browse...")
         btn_sync_folder.clicked.connect(self.browse_sync_folder)
+        btn_test_mirror = QPushButton("Test")
+        btn_test_mirror.clicked.connect(self.test_mirror_folder)
         row_sync = QHBoxLayout()
         row_sync.addWidget(self.txt_sync_folder)
         row_sync.addWidget(btn_sync_folder)
-        layout.addRow("Sync Folder:", row_sync)
+        row_sync.addWidget(btn_test_mirror)
+        layout.addRow("Mirror folder:", row_sync)
 
         self.spin_sync_interval = QSpinBox()
         self.spin_sync_interval.setRange(1, 9999)
@@ -327,19 +339,80 @@ class SettingsDialog(QDialog):
         row_interval.addWidget(self.combo_sync_unit)
         layout.addRow("Sync Interval:", row_interval)
 
+        self.spin_keep_snapshots = QSpinBox()
+        self.spin_keep_snapshots.setRange(1, 100)
+        try:
+            keep_value = int(self.config.get('savegames', {}).get('keep_snapshots', 5))
+        except (TypeError, ValueError):
+            keep_value = 5
+        self.spin_keep_snapshots.setValue(max(1, keep_value))
+        layout.addRow("Snapshots to keep:", self.spin_keep_snapshots)
+
+        self.chk_state_backup = QCheckBox(
+            "Back up launcher data (achievements, stats, preferences)"
+        )
+        self.chk_state_backup.setChecked(bool(
+            self.config.get('savegames', {}).get('include_launcher_state', True)
+        ))
+        layout.addRow(self.chk_state_backup)
+
+        row_state = QHBoxLayout()
+        self.btn_state_backup = QPushButton("Back up now")
+        self.btn_state_backup.clicked.connect(self.state_backup_requested.emit)
+        self.btn_state_restore = QPushButton("Restore from backup")
+        self.btn_state_restore.clicked.connect(self.state_restore_requested.emit)
+        row_state.addWidget(self.btn_state_backup)
+        row_state.addWidget(self.btn_state_restore)
+        layout.addRow("Launcher data:", row_state)
+
+        updated_at = int((self._state_status or {}).get('updated_at') or 0)
+        if updated_at:
+            state_text = "Last launcher data backup: {}".format(
+                time.strftime('%Y-%m-%d %H:%M', time.localtime(updated_at))
+            )
+        else:
+            state_text = "No launcher data backup yet."
+        self.lbl_state_status = QLabel(state_text)
+        self.lbl_state_status.setStyleSheet("color: #cba6d1; font-size: 11px;")
+        self.lbl_state_status.setWordWrap(True)
+        layout.addRow(self.lbl_state_status)
+
         help_label = QLabel(
-            "Set the local sync folder where savegame snapshots are stored. "
-            "The app will keep the last 3 synced snapshots per game."
+            "Snapshots are always written to the local backup folder. "
+            "Choose a mirror folder to keep a second copy on another drive, a network share "
+            "or a folder synced by Google Drive/Syncthing: the mirror is updated after every "
+            "sync and nothing is ever deleted from it. "
+            "The app keeps the last N snapshots per game and skips identical consecutive states."
         )
         help_label.setWordWrap(True)
         layout.addRow(help_label)
 
         self.pages_container.addWidget(page)
 
+    def test_mirror_folder(self):
+        folder = self.txt_sync_folder.text().strip()
+        if not folder:
+            QMessageBox.information(
+                self, "Mirror Folder",
+                "Choose a mirror folder first. The local backup folder is always used.",
+            )
+            return
+        from core.paths import PathManager
+        from managers.mirror_backend import FolderMirrorBackend
+        backend = FolderMirrorBackend(str(PathManager.get_staging_dir()), folder)
+        ok, error = backend.test()
+        if ok:
+            QMessageBox.information(self, "Mirror Folder", "The mirror folder is writable.")
+        else:
+            QMessageBox.warning(self, "Mirror Folder", "The mirror folder is not usable:\n{}".format(error))
+
     def create_api_keys_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        note = QLabel("Changes to API keys are applied after restarting the launcher.")
+        note = QLabel(
+            "Discovery rows use the API keys loaded at startup: when a key is "
+            "added or changed and you save, the launcher offers to restart."
+        )
         note.setWordWrap(True)
         note.setStyleSheet("color: #ffcc66; font-size: 11px;")
         layout.addWidget(note)
@@ -348,7 +421,7 @@ class SettingsDialog(QDialog):
         self.pages_container.addWidget(page)
 
     def browse_sync_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Savegames Sync Folder",
+        folder = QFileDialog.getExistingDirectory(self, "Select Mirror Folder",
             options=QFileDialog.Option.DontUseNativeDialog)
         if folder:
             self.txt_sync_folder.setText(folder)
@@ -504,6 +577,8 @@ class SettingsDialog(QDialog):
         self.config['savegames']['sync_folder'] = self.txt_sync_folder.text().strip()
         self.config['savegames']['sync_interval'] = self.spin_sync_interval.value()
         self.config['savegames']['sync_unit'] = self.combo_sync_unit.currentText()
+        self.config['savegames']['keep_snapshots'] = self.spin_keep_snapshots.value()
+        self.config['savegames']['include_launcher_state'] = self.chk_state_backup.isChecked()
         self.config.setdefault('playtime', {})
         self.config['playtime']['display'] = self.combo_playtime_display.currentData()
         self.config['playtime']['auto_sync'] = self.chk_playtime_auto_sync.isChecked()

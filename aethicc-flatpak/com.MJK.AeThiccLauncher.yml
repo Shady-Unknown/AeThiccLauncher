@@ -38,7 +38,11 @@ modules:
       - if [ -d lists ]; then cp -r lists /app/bin/lists; fi
       - chmod 755 /app/bin/bin/Linux/7zz
       - install -Dm644 com.MJK.AeThiccLauncher.desktop /app/share/applications/com.MJK.AeThiccLauncher.desktop
-      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/com.MJK.AeThiccLauncher.png
+      - install -Dm644 icons/icon-48.png  /app/share/icons/hicolor/48x48/apps/com.MJK.AeThiccLauncher.png
+      - install -Dm644 icons/icon-64.png  /app/share/icons/hicolor/64x64/apps/com.MJK.AeThiccLauncher.png
+      - install -Dm644 icons/icon-128.png /app/share/icons/hicolor/128x128/apps/com.MJK.AeThiccLauncher.png
+      - install -Dm644 icons/icon-256.png /app/share/icons/hicolor/256x256/apps/com.MJK.AeThiccLauncher.png
+      - install -Dm644 icons/icon-512.png /app/share/icons/hicolor/512x512/apps/com.MJK.AeThiccLauncher.png
     sources:
       - type: file
         path: ./AeThiccLauncher
@@ -56,5 +60,8 @@ modules:
         dest: lists
       - type: file
         path: ./com.MJK.AeThiccLauncher.desktop
+      - type: dir
+        path: ./icons
+        dest: icons
       - type: file
         path: ./icon.png

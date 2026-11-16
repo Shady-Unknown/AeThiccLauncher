@@ -50,7 +50,7 @@ def _log_unhandled_exception(exc_type, exc, tb):
 sys.excepthook = _log_unhandled_exception
 
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QDialog
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QIcon, QPixmap, QFontDatabase
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 
 # Assicuriamoci che la root del progetto sia nel sys.path per le importazioni assolute
@@ -175,7 +175,22 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     app.setApplicationName("AeThiccLauncher")
+    if sys.platform.startswith("linux"):
+        # Wayland takes the window/taskbar icon from the .desktop entry that
+        # matches this app id, so setWindowIcon() alone is not enough.
+        app.setDesktopFileName("com.MJK.AeThiccLauncher")
     _phase("QApplication ready")
+
+    # Emoji are UI icons here: Windows always has Segoe UI Emoji, Linux and
+    # Flatpak may ship no emoji font at all (blank glyphs). Bundle one.
+    emoji_font = os.path.join(get_base_dir(), ".media", "fonts", "NotoEmoji-Regular.ttf")
+    if os.path.exists(emoji_font):
+        font_id = QFontDatabase.addApplicationFont(emoji_font)
+        if font_id < 0:
+            print(f"[Fonts] Could not load the emoji font: {emoji_font}")
+    else:
+        print(f"[Fonts] Emoji font missing: {emoji_font}")
+    _phase("fonts loaded")
 
     # Usiamo get_base_dir() per avere un percorso affidabile sia da script che da exe compilato
     icon_path = os.path.join(get_base_dir(), ".media", "icon.png")

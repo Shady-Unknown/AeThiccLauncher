@@ -119,6 +119,18 @@ class GameDetailController:
         new_urls = CoverCache.resolve_urls(new_urls, title=title, installed_games=self.installed_games)
         self.current_game_data["cover_urls"] = new_urls
 
+        # The wide artwork can arrive after the sheet is already on screen:
+        # refresh the panel background without waiting for another selection.
+        if hasattr(self, "tab_explorer"):
+            self.tab_explorer.set_game_background(
+                [
+                    img_url,
+                    sgdb_assets.get("hero", ""),
+                    sgdb_assets.get("wide", ""),
+                ],
+                title,
+            )
+
         if not new_urls:
             return
 
@@ -704,11 +716,14 @@ class GameDetailController:
         if is_local:
             # Giochi locali: niente versione web / aggiornamenti, mostriamo il badge "Local Game"
             local_color = self.app_config['theme'].get('text_secondary_pink', '#f3c6ff')
-            self.lbl_game_version.setText(
+            self._base_version_text = (
                 f"<span style='color:{local_color};'>Local Game — not on SteamRip</span>"
             )
         else:
-            self.lbl_game_version.setText(f"<span style='color:{desat_pink};'>Web Version: {web_version}</span>{mp_label_html}")
+            self._base_version_text = (
+                f"<span style='color:{desat_pink};'>Web Version: {web_version}</span>{mp_label_html}"
+            )
+        self.lbl_game_version.setText(self._base_version_text)
 
         self._render_version_status(title, is_installed, is_local, web_version)
         self._update_age_badges(title, data)
@@ -746,9 +761,18 @@ class GameDetailController:
             if sale_platforms:
                 default_banner_text = SaleStyle.sale_cover_banner_text(" & ".join(sale_platforms), sale_discount)
 
-        # --- SFONDO GLASS: featured image SteamRip (fallback: splash screen) ---
+        # --- SFONDO GLASS: featured image SteamRip, poi rework larga SteamGridDB ---
         if hasattr(self, "tab_explorer"):
-            self.tab_explorer.set_game_background(data.get("img_url", ""), title)
+            sgdb = data.get("sgdb_assets") or {}
+            master_assets = mc_sgdb if isinstance(mc_sgdb, dict) else {}
+            self.tab_explorer.set_game_background(
+                [
+                    data.get("img_url", ""),
+                    sgdb.get("hero", "") or master_assets.get("hero", ""),
+                    sgdb.get("wide", "") or master_assets.get("wide", ""),
+                ],
+                title,
+            )
 
         # --- FIX: PRENDIAMO GLI URL DIRETTAMENTE DALLO SCRAPER ---
         if data.get('cover_urls'):
@@ -975,8 +999,7 @@ class GameDetailController:
             if cached_platforms:
                 platform_str = " & ".join(cached_platforms)
                 sale_badge = SaleStyle.sale_badge_html(platform_str, cached_discount)
-                current_ver = self.lbl_game_version.text()
-                self.lbl_game_version.setText(f"{current_ver}  |  {sale_badge}")
+                self._set_sale_badge(sale_badge)
                 if not self._is_gold_tier:
                     glow = QGraphicsDropShadowEffect(self)
                     glow.setBlurRadius(20)
@@ -1125,10 +1148,9 @@ class GameDetailController:
         if not self._is_gold_tier:
             self.lbl_game_title.setStyleSheet(SaleStyle.sale_title_style())
 
-        current_ver = self.lbl_game_version.text()
         sale_badge = SaleStyle.sale_badge_html(platform_str, discount)
-        print(f"[SaleData] setting version label: '{current_ver}' + badge '{sale_badge}'")
-        self.lbl_game_version.setText(f"{current_ver}  |  {sale_badge}")
+        print(f"[SaleData] setting version label + badge '{sale_badge}'")
+        self._set_sale_badge(sale_badge)
 
         desc_html = self.desc_display.toHtml()
         green_desc = SaleStyle.greenify_headings(desc_html)
@@ -1209,6 +1231,15 @@ class GameDetailController:
             "})()"
         )
         self.cover_image.page().runJavaScript(js)
+
+    def _set_sale_badge(self, sale_badge):
+        """Append the sale badge to the plain version line, never twice.
+
+        The label used to be read back from the widget, so every refresh
+        (cached prices, then live prices) appended another badge.
+        """
+        base = getattr(self, "_base_version_text", "") or self.lbl_game_version.text()
+        self.lbl_game_version.setText(f"{base}  |  {sale_badge}")
 
     def _hide_sale_banner(self):
         js = "(function(){var e=document.querySelector('.card-wrapper > .sale-banner');if(e)e.remove();})()"

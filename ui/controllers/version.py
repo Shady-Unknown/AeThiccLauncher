@@ -80,6 +80,7 @@ from core.version_status import (
     STATE_VERSION_ONLY,
     STATE_UNKNOWN,
 )
+from core.master_catalog import CLEAR
 from network.steam_build_worker import SteamBuildWorker
 
 from ui.dialogs.steam_restart_dialog import SteamRestartDialog
@@ -154,8 +155,17 @@ class VersionController:
                 entry["version_status"] = status
                 self._save_offline_cache()
         else:
-            # Marker: la pagina non ha il widget, non ritentare a ogni avvio
-            self.master_catalog.set_version_status(title, {"variant": "none"})
+            # Marker: la pagina non ha il widget, non ritentare a ogni avvio.
+            # I build salvati prima non valgono più: vanno cancellati, altrimenti
+            # la card resta "Steam ahead" per sempre su dati vecchi.
+            self.master_catalog.set_version_status(title, {
+                "variant": "none",
+                "posted_build": CLEAR,
+                "posted_build_date": CLEAR,
+                "posted_version": CLEAR,
+                "alert": CLEAR,
+                "subtext": CLEAR,
+            })
             print(f"[VersionStatus] nessun widget Version Status per '{title}'")
 
         if self._version_status_current_title == title:
@@ -182,10 +192,12 @@ class VersionController:
     def _version_status_alert(self, state, status, is_installed, installed_build, posted_build, steam_build):
         theme = self.app_config.get('theme', {})
         green = theme.get('status_green', '#00ff88')
-        amber = theme.get('status_yellow', '#ffcc00')
         purple = theme.get('main_accent_color', '#733d91')
         muted = theme.get('text_muted', '#8a7fa4')
         pink = theme.get('bright_neon_accent', '#ff00a0')
+        # "Steam is ahead" is the normal state, not a warning: the split pill
+        # already carries the colour, the sentence must read as information.
+        info = theme.get('text_primary_white', '#ffffff')
 
         if state == STATE_UPDATE_AVAILABLE:
             if installed_build and posted_build:
@@ -200,7 +212,7 @@ class VersionController:
                 message = (f"SteamRIP is on build {posted_build}; Steam is already on {steam_build}.")
             else:
                 message = status.get('alert') or "Steam has a newer build than SteamRIP."
-            return (message, amber)
+            return (message, info)
 
         if state == STATE_UPDATED:
             if is_installed:
@@ -279,8 +291,9 @@ class VersionController:
             if meta.get('build_inferred'):
                 installed_date = (installed_date + " · inferred").strip(" ·")
         _set_row('installed', installed_build if is_installed else "—", installed_date)
-        _set_row('posted', posted_build or status.get('posted_version') or site_version,
-                 status.get('posted_build_date', ''))
+        # The build row only ever shows a real build id: a version label lives
+        # in the pill ("Version vX"), never in the STEAMRIP BUILD slot.
+        _set_row('posted', posted_build, status.get('posted_build_date', ''))
         _set_row('steam', steam_build, status.get('steam_build_date', ''))
 
         alert_text, alert_color = self._version_status_alert(

@@ -1,25 +1,56 @@
 import os
 import json
+import html
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea, QMessageBox, QMenu, QDialog, QFileDialog
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices, QPixmap, QAction, QCursor
 
 from managers.save_manager import safe_game_folder_name
 from managers.playtime_manager import PlaytimeManager
+from managers.backup_service import BackupService
+from core import game_version
 from core.mini_cover_cache import MiniCoverManager
 from core import steam_integration
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.savegame_card import SavegameCard
 
+MIRROR_STATE_LABELS = {
+    'local_only': 'not mirrored yet',
+    'mirror_only': 'only in the mirror',
+    'synced': 'synced',
+    'local_newer': 'local is newer',
+    'mirror_newer': 'mirror is newer',
+    'conflict': 'conflict: both sides have new backups',
+}
+
+
+def _format_manifest_time(value):
+    """Render a ``savegames.json`` timestamp in local time.
+
+    Schema 2 stores UTC ISO strings; version 1 manifests stored local time
+    without a timezone, so both formats are accepted.
+    """
+    text = str(value or '').strip()
+    if not text:
+        return ""
+    try:
+        if text.endswith('Z'):
+            parsed = datetime.strptime(text, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+            return parsed.astimezone().strftime('%Y-%m-%d %H:%M')
+        return datetime.strptime(text, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d %H:%M')
+    except ValueError:
+        return text
+
 
 class SavegamesTab(QWidget):
-    def __init__(self, app_config, installed_games, manager, parent=None):
+    def __init__(self, app_config, installed_games, manager, parent=None, backup_service=None):
         super().__init__(parent)
         self.app_config = app_config
         self.installed_games = installed_games
         self.manager = manager
+        self.backup_service = backup_service or BackupService(manager)
         self.app_window = parent
         self._cards = []
         self._cover_worker = None
@@ -42,6 +73,10 @@ class SavegamesTab(QWidget):
         self.btn_sync_all = QPushButton("Sync all game saves")
         self.btn_sync_all.clicked.connect(self.sync_all)
         header_layout.addWidget(self.btn_sync_all)
+
+        self.btn_mirror = QPushButton("↗ Update mirror")
+        self.btn_mirror.clicked.connect(self.push_mirror)
+        header_layout.addWidget(self.btn_mirror)
 
         self.btn_sync_playtime = QPushButton("⏱ Sync Play Time")
         self.btn_sync_playtime.clicked.connect(self.sync_playtime)
@@ -72,9 +107,13 @@ class SavegamesTab(QWidget):
         self.lbl_disclaimer.setWordWrap(True)
         bottom_layout.addWidget(self.lbl_disclaimer, stretch=1)
 
-        self.btn_open_sync = QPushButton(" Open Synced Folder")
+        self.btn_open_sync = QPushButton(" Open Local Backup Folder")
         self.btn_open_sync.clicked.connect(self.open_sync_folder)
         bottom_layout.addWidget(self.btn_open_sync)
+
+        self.btn_open_mirror = QPushButton(" Open Mirror Folder")
+        self.btn_open_mirror.clicked.connect(self.open_mirror_folder)
+        bottom_layout.addWidget(self.btn_open_mirror)
 
         layout.addLayout(bottom_layout)
 
@@ -129,6 +168,22 @@ class SavegamesTab(QWidget):
             }}
         """.format(white=text_white, main=main_accent, neon=bright_neon))
 
+        secondary_style = """
+            QPushButton {{
+                background-color: transparent; color: {white}; border: 1px solid {main};
+                border-radius: 5px; padding: 8px 12px; font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 0.1);
+                border: 1px solid {neon}; color: {neon};
+            }}
+            QPushButton:disabled {{
+                color: {muted}; border-color: {muted};
+            }}
+        """.format(white=text_white, main=main_accent, neon=bright_neon, muted=text_muted)
+        self.btn_mirror.setStyleSheet(secondary_style)
+        self.btn_open_mirror.setStyleSheet(secondary_style)
+
         self.lbl_disclaimer.setStyleSheet(
             "font-size: 11px; color: {muted}; padding: 4px 10px; "
             "background-color: rgba(0,0,0,0.1); border-radius: 4px;".format(muted=text_muted)
@@ -162,41 +217,80 @@ class SavegamesTab(QWidget):
         if sync_folder and os.path.exists(sync_folder):
             QDesktopServices.openUrl(QUrl.fromLocalFile(sync_folder))
         else:
-            QMessageBox.warning(self, "Folder Not Found", "The sync folder does not exist yet or is not configured.")
+            QMessageBox.warning(self, "Folder Not Found",
+                                "The local backup folder does not exist yet. Run a sync first.")
+
+    def open_mirror_folder(self):
+        mirror = self.manager.get_mirror_folder()
+        if mirror and os.path.exists(mirror):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(mirror))
+        else:
+            QMessageBox.warning(self, "Folder Not Found",
+                                "The mirror folder is not configured or does not exist yet.")
+
+    def push_mirror(self):
+        if not self.manager.get_mirror_folder():
+            QMessageBox.information(
+                self, "Mirror Folder",
+                "No mirror folder is configured. Choose one in Settings → Savegames Manager."
+            )
+            return
+
+        report = self.manager.push_mirror()
+        if report.get('errors'):
+            QMessageBox.warning(
+                self, "Mirror finished with warnings",
+                "{} file(s) copied, {} already up to date, {} issue(s).\n"
+                "The local backups are intact; see the log for details.".format(
+                    report.get('copied', 0), report.get('skipped', 0), len(report['errors'])
+                )
+            )
+        else:
+            QMessageBox.information(
+                self, "Mirror updated",
+                "{} file(s) copied, {} already up to date.".format(
+                    report.get('copied', 0), report.get('skipped', 0)
+                )
+            )
+        self.refresh_view()
 
     def refresh_view(self):
-        sync_folder = self.manager.get_sync_folder()
+        local_folder = self.manager.get_sync_folder()
+        mirror_folder = self.manager.get_mirror_folder()
 
         self._clear_cards()
         self.sync_info_label.setText("")
-
-        if not sync_folder:
-            self.message_label.setText(
-                "Savegames Manager is not configured. Please set a Sync Folder in the Configuration Panel."
-            )
-            self.btn_sync_all.setEnabled(False)
-            self.btn_open_sync.setEnabled(False)
-            return
+        self.message_label.setText("")
 
         self.btn_sync_all.setEnabled(True)
         self.btn_open_sync.setEnabled(True)
-        self.message_label.setText("")
+        self.btn_mirror.setEnabled(bool(mirror_folder))
+        self.btn_open_mirror.setEnabled(bool(mirror_folder) and os.path.exists(mirror_folder))
+
+        # First run with a configured mirror: bring in backups that only exist
+        # there (one-time, copy only, nothing is deleted).
+        try:
+            self.manager.ensure_mirror_import()
+        except Exception as exc:
+            print(f"[Savegames] Mirror import failed: {exc}")
+
+        interval = self.app_config.get('savegames', {}).get('sync_interval', 30)
+        unit = self.app_config.get('savegames', {}).get('sync_unit', 'minutes')
+        mirror_html = html.escape(mirror_folder) if mirror_folder else "not configured"
         self.sync_info_label.setText(
-            "Sync folder: <b>{}</b> | Interval: {} {}".format(
-                sync_folder,
-                self.app_config.get('savegames', {}).get('sync_interval', 30),
-                self.app_config.get('savegames', {}).get('sync_unit', 'minutes'),
+            "Local backup folder: <b>{}</b> | Mirror: {} | Interval: {} {}".format(
+                html.escape(local_folder), mirror_html, interval, unit
             )
         )
 
-        if not os.path.exists(sync_folder):
+        if not os.path.exists(local_folder):
             self.message_label.setText(
-                "The configured sync folder does not exist yet. It will be created when you run a sync."
+                "The local backup folder does not exist yet. It will be created when you run a sync."
             )
             self.btn_open_sync.setEnabled(False)
             return
 
-        self._populate_cards(sync_folder)
+        self._populate_cards(local_folder)
 
     def _clear_cards(self):
         while self.flow_layout.count():
@@ -206,6 +300,15 @@ class SavegamesTab(QWidget):
         self._cards.clear()
 
     def _populate_cards(self, sync_folder):
+        mirror_states = {}
+        if self.manager.get_mirror_folder():
+            try:
+                for entry in self.manager.compare_mirror():
+                    mirror_states[entry.get('safe_title')] = entry
+                    mirror_states[entry.get('title')] = entry
+            except Exception as exc:
+                print(f"[Savegames] Mirror compare failed: {exc}")
+
         try:
             names = sorted(os.listdir(sync_folder), key=str.lower)
         except Exception:
@@ -227,7 +330,7 @@ class SavegamesTab(QWidget):
                     with open(meta_path, 'r', encoding='utf-8') as f:
                         smeta = json.load(f)
                     game_title = smeta.get('game_title', name)
-                    last_sync_str = smeta.get('last_synced', 'Never synced')
+                    last_sync_str = _format_manifest_time(smeta.get('last_synced', '')) or "Never synced"
                     playtime_seconds = int(smeta.get('playtime_seconds', 0) or 0)
                 except Exception:
                     pass
@@ -283,8 +386,22 @@ class SavegamesTab(QWidget):
                 }}
             """.format(surface=surface, accent=accent, neon=neon))
 
+            state_entry = mirror_states.get(name) or mirror_states.get(game_title)
+            if state_entry:
+                card.setToolTip(self._mirror_tooltip(state_entry))
+
             self.flow_layout.addWidget(card)
             self._cards.append(card)
+
+    @staticmethod
+    def _mirror_tooltip(entry):
+        label = MIRROR_STATE_LABELS.get(entry.get('state'), str(entry.get('state') or ''))
+        lines = ["Mirror: {}".format(label)]
+        if entry.get('local_version'):
+            lines.append("Local: {}".format(game_version.describe_version(entry['local_version'])))
+        if entry.get('mirror_version'):
+            lines.append("Mirror copy: {}".format(game_version.describe_version(entry['mirror_version'])))
+        return "\n".join(lines)
 
     def _ensure_cover_worker(self):
         if self._cover_worker is None:
@@ -339,20 +456,27 @@ class SavegamesTab(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(game_root))
 
     def sync_all(self):
-        if not self.manager.get_sync_folder():
-            QMessageBox.warning(self, "No Sync Folder", "Configure a Sync Folder in Settings before syncing savegames.")
-            return
-
         summary = self.manager.sync_all_games()
+        created = summary.get('synced_games', 0)
+        unchanged = summary.get('unchanged_games', 0)
+        mirror = summary.get('mirror') or {}
+        mirror_text = ""
+        if mirror.get('configured'):
+            mirror_text = "\nMirror: {} file(s) copied, {} already up to date.".format(
+                mirror.get('copied', 0), mirror.get('skipped', 0)
+            )
         if summary.get('errors'):
             QMessageBox.warning(
                 self, "Sync finished with warnings",
                 "Some savegames could not be synced. Check the log or the messages below."
+                + mirror_text
             )
         else:
             QMessageBox.information(
                 self, "Sync complete",
-                "Synced {} game(s).".format(summary.get('synced_games', 0))
+                "{} new snapshot(s), {} game(s) already up to date.{}".format(
+                    created, unchanged, mirror_text
+                )
             )
 
         self.refresh_view()
@@ -497,54 +621,28 @@ class SavegamesTab(QWidget):
         menu.exec(QCursor.pos())
 
     def _resolve_source_path(self, smeta):
-        def _expand(path):
-            return os.path.expandvars(path) if os.name == 'nt' else path
+        """Resolve the live save folder for a game card.
 
-        custom = smeta.get('savegame_path_custom', '')
-        if custom:
-            expanded = _expand(custom)
-            if os.path.exists(expanded):
-                return expanded
-
-        path = _expand(smeta.get('source_path', ''))
-        if path and os.path.exists(path):
-            return path
-
-        win_path = smeta.get('savegame_path_win', '')
-        if os.name == 'nt' and win_path:
-            expanded = _expand(win_path)
-            if not re.match(r'^[a-zA-Z]:\\', expanded) and not expanded.startswith('%'):
-                install_dir = smeta.get('install_dir', '')
-                if install_dir:
-                    expanded = os.path.join(install_dir, expanded.lstrip('\\/'))
-            if os.path.exists(expanded):
-                return expanded
-
+        The installed game is the source of truth: its meta holds the portable
+        path and the current Steam shortcut id, so a reinstall (or a different
+        compatdata prefix) cannot leave us pointing at a stale location.
+        """
         game_title = smeta.get('game_title', '')
-        grid_id = ''
+        live_meta = self.installed_games.get(game_title) if game_title else None
+        if live_meta:
+            path = self.manager.get_source_save_path(live_meta)
+            if path:
+                return path
 
-        if game_title and self.installed_games:
-            live_meta = self.installed_games.get(game_title, {})
-            grid_id = live_meta.get('steam_grid_id', '')
-            if not grid_id:
-                exe_path = live_meta.get('exe_path', '')
-                if exe_path:
-                    from core.steam_integration import get_steam_ids
-                    _, grid_id, _ = get_steam_ids(exe_path, game_title)
-
-        if not grid_id:
-            grid_id = smeta.get('steam_grid_id', '')
-
-        if win_path and grid_id and os.name != 'nt':
-            reconstructed = self.manager.translate_win_path_to_linux(win_path, grid_id)
-            if reconstructed:
-                return reconstructed
-
+        path = self.manager.get_source_save_path(smeta)
         if path:
             return path
-        if win_path:
-            return _expand(win_path)
-        return _expand(smeta.get('savegame_path_linux', ''))
+
+        # Last resort: the folder recorded when the snapshot was taken.
+        recorded = smeta.get('source_path', '')
+        if recorded and os.path.exists(recorded):
+            return recorded
+        return ""
 
     def _open_game_save_folder(self, game_root):
         meta_path = os.path.join(game_root, 'savegames.json')
@@ -632,40 +730,57 @@ class SavegamesTab(QWidget):
         self.refresh_view()
 
     def _show_restore_dialog(self, game_root):
-        meta_path = os.path.join(game_root, 'savegames.json')
-        if not os.path.exists(meta_path):
-            QMessageBox.warning(self, "No Metadata", "No savegames.json found for this game.")
-            return
-        try:
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                smeta = json.load(f)
-        except Exception:
-            QMessageBox.warning(self, "Error", "Could not read savegames.json.")
-            return
-
-        source_path = self._resolve_source_path(smeta)
-        if not source_path:
-            QMessageBox.warning(self, "No Source Path",
-                                "The original save path is not recorded for this game.\n"
-                                "Try running Sync All to generate path data.")
+        """Pick a local snapshot and restore it through BackupService."""
+        smeta = self.manager.read_game_manifest(game_root)
+        title = smeta.get('game_title') or os.path.basename(os.path.normpath(game_root))
+        live_meta = self.installed_games.get(title)
+        if not live_meta:
+            QMessageBox.warning(
+                self, "Game Not Installed",
+                "<b>{}</b> is not installed right now.<br><br>"
+                "Install the game first: the save folder depends on the installation "
+                "path (and, on Linux, on the Proton prefix), so a backup can only be "
+                "restored on a machine where the game is present.".format(html.escape(title))
+            )
             return
 
-        saves_dir = os.path.join(game_root, 'saves')
-        if not os.path.isdir(saves_dir):
-            QMessageBox.information(self, "No Backups", "No backup snapshots found for this game.")
-            return
-
-        snapshots = sorted(
-            [d for d in os.listdir(saves_dir) if os.path.isdir(os.path.join(saves_dir, d))],
-            reverse=True,
-        )
+        snapshots = self.backup_service.list_snapshots(title)
         if not snapshots:
             QMessageBox.information(self, "No Backups", "No backup snapshots found for this game.")
             return
 
+        destination = self.manager.get_source_save_path(live_meta)
+        if not destination:
+            QMessageBox.warning(
+                self, "No Save Path",
+                "The save folder for <b>{}</b> could not be resolved.<br><br>"
+                "Use <b>Point to Saves Folder</b> first.".format(html.escape(title))
+            )
+            return
+
+        create_missing = False
+        if not os.path.exists(destination):
+            reply = QMessageBox.question(
+                self, "Save Folder Missing",
+                "The save folder does not exist yet:<br><code>{}</code><br><br>"
+                "This usually means the game has not been launched since it was installed. "
+                "Create it and restore the backup into it?".format(html.escape(destination)),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            create_missing = True
+
+        installed_version = game_version.version_info_from_meta(live_meta)
+        # The staging folder is keyed by the manifest title; keep it even when
+        # the live meta uses a slightly different display title.
+        restore_meta = dict(live_meta)
+        restore_meta['title'] = title
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Select Backup to Restore")
-        dialog.setMinimumWidth(360)
+        dialog.setMinimumWidth(480)
         dialog.setStyleSheet("""
             QDialog {
                 background-color: #1a0f2b;
@@ -684,6 +799,7 @@ class SavegamesTab(QWidget):
                 border-radius: 5px;
                 padding: 8px 16px;
                 font-size: 13px;
+                text-align: left;
             }
             QPushButton:hover {
                 background-color: #ff00a0;
@@ -698,36 +814,152 @@ class SavegamesTab(QWidget):
         header.setStyleSheet("font-weight: bold; font-size: 14px;")
         dl.addWidget(header)
 
-        for snap in snapshots:
-            try:
-                ts = datetime.strptime(snap.split('_')[0] + '_' + snap.split('_')[1], '%Y%m%d_%H%M%S')
-                label = ts.strftime('%Y-%m-%d %H:%M:%S')
-            except Exception:
-                label = snap
+        target_label = QLabel("Destination: <code>{}</code>".format(html.escape(destination)))
+        target_label.setWordWrap(True)
+        target_label.setStyleSheet("font-size: 11px; color: #cba6d1;")
+        dl.addWidget(target_label)
 
-            btn = QPushButton(label)
-            snap_path = os.path.join(saves_dir, snap)
-            btn.clicked.connect(lambda checked, sp=snap_path, ssp=source_path: self._do_restore(sp, ssp, dialog))
+        for snap in snapshots:
+            btn = QPushButton(self._snapshot_button_label(snap))
+            btn.setToolTip(
+                "Snapshot {} · {} · {} file state(s)".format(
+                    snap.get('id', ''),
+                    game_version.describe_version(snap.get('version') or {}),
+                    "complete" if snap.get('complete', True) else "INCOMPLETE",
+                )
+            )
+            btn.clicked.connect(
+                lambda checked, s=snap: self._confirm_restore(
+                    restore_meta, s, destination, installed_version, create_missing, dialog
+                )
+            )
             dl.addWidget(btn)
 
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("background-color: transparent; border: 1px solid #733d91;")
         cancel_btn.clicked.connect(dialog.reject)
         dl.addWidget(cancel_btn)
 
         dialog.exec()
 
-    def _do_restore(self, snap_path, source_path, dialog):
+    @staticmethod
+    def _snapshot_button_label(snap):
+        created = str(snap.get('created_at') or '')
+        when = created or str(snap.get('id') or '')
         try:
-            if os.path.exists(source_path):
-                shutil.rmtree(source_path, ignore_errors=True)
-            os.makedirs(source_path, exist_ok=True)
-            shutil.copytree(snap_path, source_path, dirs_exist_ok=True)
-            QMessageBox.information(self, "Restore Complete",
-                                    "The selected save has been restored to the game folder.")
+            if created.endswith('Z'):
+                parsed = datetime.strptime(created, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                when = parsed.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            pass
+
+        version = game_version.describe_version(snap.get('version') or {})
+        notes = []
+        reason = str(snap.get('reason') or '')
+        if reason == 'pre_update':
+            notes.append("pre-update")
+        elif reason == 'pre_restore':
+            notes.append("before restore")
+        if not snap.get('complete', True):
+            notes.append("INCOMPLETE")
+        suffix = " · " + ", ".join(notes) if notes else ""
+        return "{} · {}{}".format(when, version, suffix)
+
+    def _confirm_restore(self, live_meta, snap, destination, installed_version,
+                         create_missing, dialog):
+        title = live_meta.get('title') or live_meta.get('game_title') or 'the game'
+        version = snap.get('version') or {}
+        comparison = game_version.compare_versions(version, installed_version)
+
+        message = (
+            "Restore the backup <b>{}</b> for <b>{}</b>?<br><br>"
+            "Destination: <code>{}</code><br><br>"
+        ).format(
+            html.escape(self._snapshot_button_label(snap)),
+            html.escape(str(title)),
+            html.escape(destination),
+        )
+
+        if not snap.get('complete', True):
+            message += (
+                "<b>Warning:</b> this snapshot is marked as incomplete "
+                "({} file(s) could not be copied).<br><br>".format(snap.get('errors', 0))
+            )
+
+        if comparison['status'] == game_version.STATUS_DIFFERENT:
+            message += (
+                "<b>Version mismatch</b><br>"
+                "Backup: {}<br>Installed: {}<br><br>"
+                "Savegames from a different build may not load or may corrupt your progress. "
+                "Check the game's official changelog and the developer's notes before restoring."
+                "<br><br>"
+            ).format(
+                html.escape(game_version.describe_version(version)),
+                html.escape(game_version.describe_version(installed_version)),
+            )
+        elif comparison['status'] == game_version.STATUS_UNKNOWN:
+            message += (
+                "<b>Version not recorded</b><br>"
+                "The build of this backup is unknown, so compatibility cannot be checked. "
+                "Check the official changelog and the developer's notes before restoring."
+                "<br><br>"
+            )
+
+        message += "The current saves will be snapshotted automatically before restoring."
+
+        reply = QMessageBox.question(
+            self, "Restore Backup", message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        result = self.backup_service.restore_game(
+            live_meta, snap.get('id', ''), create_missing=create_missing
+        )
+        if result.get('ok'):
+            safety = result.get('safety_snapshot') or "none"
+            QMessageBox.information(
+                self, "Restore Complete",
+                "Restored {} file(s) into:<br><code>{}</code><br><br>"
+                "Safety snapshot: <b>{}</b>".format(
+                    result.get('files', 0),
+                    html.escape(result.get('destination', destination)),
+                    html.escape(str(safety)),
+                )
+            )
             dialog.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Restore Failed",
-                                 "Could not restore the save:\n{}".format(e))
+            self.refresh_view()
+        else:
+            QMessageBox.critical(
+                self, "Restore Failed",
+                self._restore_error_text(result)
+            )
+
+    @staticmethod
+    def _restore_error_text(result):
+        reason = str(result.get('reason') or '')
+        detail = str(result.get('detail') or '')
+        errors = result.get('errors') or []
+        messages = {
+            'not_installed': "The game is not installed, so its save folder cannot be resolved.",
+            'snapshot_not_found': "The selected snapshot no longer exists.",
+            'destination_unknown': "The save folder could not be resolved for this game.",
+            'destination_missing': "The save folder does not exist yet. Confirm creating it first.",
+            'destination_parent_missing': "The parent folder of the save path does not exist.",
+            'destination_kind_mismatch': "The destination is a file, but this backup contains a folder.",
+            'unsafe_target': "The save path is not a folder the launcher is allowed to write into"
+                             " ({}).<br><br>Use <b>Point to Saves Folder</b> to choose it explicitly.".format(detail or "outside allowed roots"),
+            'safety_snapshot_failed': "The current saves could not be snapshotted, so nothing was overwritten.",
+            'copy_failed': "The backup content could not be read or written.",
+            'swap_failed': "The save folder could not be replaced.",
+            'snapshot_content_missing': "The snapshot is missing its data file.",
+        }
+        text = messages.get(reason, "Unexpected error while restoring the backup.")
+        if errors:
+            text += "<br><br>" + "<br>".join(html.escape(str(err)) for err in errors[:5])
+        return text
 
     def _restore_playtime(self, game_root):
         """Ripristina il playtime del backup nel launcher e accoda la sync a Steam."""

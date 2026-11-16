@@ -20,7 +20,7 @@ class StateBackupTests(unittest.TestCase):
         self.manager = StateBackupManager(
             state_dir=self.state_dir,
             app_data_dir=self.app_data_dir,
-            sync_folder=self.sync_dir,
+            backup_root=self.sync_dir,
             keep_snapshots=2,
         )
 
@@ -128,15 +128,21 @@ class StateBackupTests(unittest.TestCase):
         self.assertEqual(len(snapshots), 2)
 
     def test_enabled_for_config(self):
+        # The local store is always available: only the toggle disables it.
+        self.assertTrue(StateBackupManager.enabled_for({}))
         self.assertTrue(StateBackupManager.enabled_for({
-            "savegames": {"sync_folder": "D:/Sync"}
-        }))
-        self.assertFalse(StateBackupManager.enabled_for({
             "savegames": {"sync_folder": ""}
         }))
         self.assertFalse(StateBackupManager.enabled_for({
-            "savegames": {"sync_folder": "D:/Sync", "include_launcher_state": False}
+            "savegames": {"include_launcher_state": False}
         }))
+
+    def test_status_reports_backup(self):
+        self.manager.write_current()
+        status = self.manager.status()
+        self.assertTrue(status["root"].endswith(".launcher_state"))
+        self.assertGreater(status["files"], 0)
+        self.assertGreater(status["updated_at"], 0)
 
 
 if __name__ == "__main__":

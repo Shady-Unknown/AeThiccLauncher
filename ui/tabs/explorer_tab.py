@@ -936,32 +936,53 @@ class ExplorerTab(QWidget):
 
     # ── sfondo del gioco ─────────────────────────────────────────────
 
-    def set_game_background(self, featured_url, title=""):
-        """Sfondo: featured image SteamRIP, altrimenti splash screen."""
-        url = str(featured_url or "").strip()
-        if not url:
+    def set_game_background(self, sources, title=""):
+        """Background of the game sheet: the first usable wide image wins.
+
+        The SteamRip featured image comes first, then the wide SteamGridDB
+        artwork (``hero``/``wide``). Portrait grids and the vertical cover are
+        never used here, and a failed download falls back to the splash screen
+        instead of the 480x720 placeholder.
+        """
+        if isinstance(sources, str):
+            sources = [sources]
+        urls = []
+        for source in sources or []:
+            url = str(source or "").strip()
+            if url and url not in urls:
+                urls.append(url)
+        key = (str(title or ""), tuple(urls))
+        if key == getattr(self, "_bg_key", None) and (
+            self.bg_layer.has_image() or self._bg_workers
+        ):
+            return
+        self._bg_key = key
+        token = object()
+        self._bg_token = token
+        if not urls:
             self.bg_layer.set_source(None)
             return
-        cached = self._bg_paths.get(url)
-        if cached and os.path.isfile(cached):
-            self.bg_layer.set_source(cached)
-            return
+        for url in urls:
+            cached = self._bg_paths.get(url)
+            if cached and os.path.isfile(cached):
+                self.bg_layer.set_source(cached)
+                return
         self._bg_workers = [worker for worker in self._bg_workers if worker.isRunning()]
-        worker = FeaturedImageWorker(url, self)
-        worker.ready.connect(self._on_background_ready)
+        worker = FeaturedImageWorker(urls, self)
+        worker.ready.connect(
+            lambda url, path, token=token: self._on_background_ready(token, url, path)
+        )
         worker.finished.connect(lambda w=worker: self._cleanup_bg_worker(w))
         self._bg_workers.append(worker)
         worker.start()
 
-    def _on_background_ready(self, url, path):
-        if path:
+    def _on_background_ready(self, token, url, path):
+        if token is not getattr(self, "_bg_token", None):
+            # A late result from the game we just left.
+            return
+        if url and path:
             self._bg_paths[url] = path
-            current = str((getattr(self.mw, "current_game_data", {}) or {}).get("img_url", "") or "")
-            if current and current != url:
-                return
-            self.bg_layer.set_source(path)
-        else:
-            self.bg_layer.set_source(None)
+        self.bg_layer.set_source(path or None)
 
     def _cleanup_bg_worker(self, worker):
         self._bg_workers = [w for w in self._bg_workers if w is not worker and w.isRunning()]

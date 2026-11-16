@@ -177,6 +177,17 @@ class InstallerFlowCoordinator(QObject):
 
         self._current_preserve_meta = preserve_meta
 
+        # Snapshot the current saves before the installer overwrites the game
+        # folder: they belong to the build being replaced, so the snapshot is
+        # labeled with the version currently installed.
+        if preserve_meta and existing_meta:
+            snapshot_meta = dict(existing_meta)
+            snapshot_meta.setdefault('title', game_title)
+            try:
+                self.app_window.savegames_manager.backup_before_update(snapshot_meta)
+            except Exception as exc:
+                print(f"[Savegames] Pre-update backup skipped: {exc}")
+
         if hasattr(self.app_window, 'dl_manager'):
             self.app_window.dl_manager.set_extraction_install_dir(
                 temp_archive_path, target_final_path

@@ -90,8 +90,8 @@ While many of our ethical features are still actively being developed behind the
 *   **Auto-Extraction & Installation:** Games are downloaded, automatically extracted, and neatly placed into your designated "Game Libraries".
 
 ### Stats & Achievements
-*   **Stats overview:** real local data for hours, sessions, streaks, value per hour, library value, developers, publishers and genres.
-*   **Charts:** 52-week activity heatmap, hours by time of day and weekday, session lengths, genre donut, top developers and best value-per-hour ranking.
+*   **Stats overview:** real local data for hours, sessions, streaks, Entertainment Yield (hours played per dollar of reference price), library value, developers, publishers and genres.
+*   **Charts:** 52-week activity heatmap, hours by time of day and weekday, session lengths, genre donut, top developers and a highest/lowest Entertainment Yield ranking.
 *   **Per-game browser:** searchable and sortable library with covers, selected-game metrics, playtime chart and a rotating advice banner.
 *   **Launcher achievements:** 40 data-driven achievements with unlock toasts, retroactive evaluation, hidden entries, filters and progress bars.
 *   **Achievement popup:** full-window dimmed overlay with the large icon, status/date and progress; close with Esc or a click outside the card.

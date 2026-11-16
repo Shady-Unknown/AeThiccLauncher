@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidg
 from ui.widgets.elided_label import ElidedLabel
 from core.config import get_base_dir
 from core.events import EVENT_GAME_INSTALLED, EVENT_GAME_REMOVED
+from core.meta_utils import is_local_install  # re-exported for existing imports
 from core.version_status import (
     compute_version_state,
     STATE_UPDATE_AVAILABLE,
@@ -14,17 +15,6 @@ from core.version_status import (
     STATE_UPDATED,
     STATE_VERSION_ONLY,
 )
-
-
-def is_local_install(meta):
-    """True se il gioco è installato localmente ma NON proviene da SteamRip
-    (flag is_local esplicito, oppure nessuna source_url valida) e non è un orfano."""
-    if not meta or meta.get('is_orphan'):
-        return False
-    if meta.get('is_local') is True:
-        return True
-    url = str(meta.get('source_url') or '').strip()
-    return not url or url == 'N/A'
 
 
 class LibraryManager:

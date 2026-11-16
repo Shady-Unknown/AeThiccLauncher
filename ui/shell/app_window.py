@@ -62,6 +62,8 @@ from managers.igdb_details_cache import IgdbDetailsCache
 from managers.igdb_batch_manager import IGDBBatchManager
 from managers.stats_manager import StatsManager
 from managers.achievements_manager import AchievementsManager
+from managers.state_backup_manager import StateBackupManager
+from managers.backup_service import BackupService
 from ui.widgets.achievement_toast import AchievementToastManager
 from network.igdb_details_worker import IGDBDetailsWorker
 from managers.background_scanner import BackgroundScanner
@@ -69,11 +71,15 @@ from core.game_launcher import GameLauncher
 from core.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
+    EVENT_ACHIEVEMENT_UNLOCKED,
     EVENT_BACKUP_CREATED,
     EVENT_IGDB_DETAILS_READY,
     EVENT_LAUNCHER_START,
+    EVENT_PREFS_CHANGED,
     EVENT_PRICE_REFRESHED,
+    EVENT_REGION_CHANGED,
     EVENT_SESSION_END,
+    EVENT_STATS_INVALIDATED,
 )
 from core.gold_tier import GoldTierManager
 from ui.styles.gold_tier_style import GoldTierStyle, GOLD_PRIMARY
@@ -434,9 +440,15 @@ class AppWindow(
         self.tabs.addTab(self.dl_manager, "⬇️ Downloads")
 
         self.savegames_manager = SavegamesManager(self.app_config, self.installed_games, self)
-        self.savegames_tab = SavegamesTab(self.app_config, self.installed_games, self.savegames_manager, self)
+        self.state_backup_manager = StateBackupManager.from_config(self.app_config)
+        self.backup_service = BackupService(self.savegames_manager, self.state_backup_manager)
+        self.savegames_tab = SavegamesTab(
+            self.app_config, self.installed_games, self.savegames_manager, self,
+            backup_service=self.backup_service,
+        )
         self.tabs.addTab(self.savegames_tab, "💾 Saves Manager")
         self.playtime_manager = PlaytimeManager(self)
+        self._init_state_backup()
 
         self.savegames_timer = QTimer(self)
         self.savegames_timer.timeout.connect(self._perform_scheduled_savegame_sync)
@@ -491,6 +503,50 @@ class AppWindow(
             if central_widget:
                 central_widget.raise_() # ...ma le Tab (nel centralWidget) davanti al logo!
 
+    # ------------------------------------------------------ launcher state
+    def _init_state_backup(self):
+        """Debounced backup of launcher data, triggered by user activity."""
+        self._state_backup_timer = QTimer(self)
+        self._state_backup_timer.setSingleShot(True)
+        self._state_backup_timer.setInterval(45000)
+        self._state_backup_timer.timeout.connect(self._flush_state_backup)
+
+        for name in (
+            EVENT_ACHIEVEMENT_UNLOCKED,
+            EVENT_SESSION_END,
+            EVENT_PREFS_CHANGED,
+            EVENT_REGION_CHANGED,
+            EVENT_STATS_INVALIDATED,
+        ):
+            self.events.subscribe(name, self._on_state_backup_event)
+
+        if hasattr(self, 'achievements_manager'):
+            self.achievements_manager.achievement_unlocked.connect(
+                lambda _badge: self.schedule_state_backup()
+            )
+
+    def _on_state_backup_event(self, _payload=None):
+        self.schedule_state_backup()
+
+    def state_backup_enabled(self):
+        manager = getattr(self, 'state_backup_manager', None)
+        return bool(manager) and StateBackupManager.enabled_for(self.app_config)
+
+    def schedule_state_backup(self):
+        """Ask for a state backup soon; repeated events collapse into one."""
+        if not self.state_backup_enabled():
+            return
+        if not self._state_backup_timer.isActive():
+            self._state_backup_timer.start()
+
+    def _flush_state_backup(self):
+        if not self.state_backup_enabled():
+            return
+        try:
+            self.backup_service.backup_state(push=True)
+        except Exception as exc:
+            print(f"[State] Backup failed: {exc}")
+
     def closeEvent(self, event):
         print(f"[App] Spegnimento sicuro in corso... (spontaneous={getattr(event, 'spontaneous', lambda: '?')()})")
         
@@ -542,6 +598,15 @@ class AppWindow(
                 self.playtime_manager.try_flush_pending()
             except Exception as e:
                 print(f"[Playtime] Errore flush alla chiusura: {e}")
+
+        # 5. Launcher state backup (achievements, stats, preferences)
+        if hasattr(self, 'backup_service'):
+            try:
+                if hasattr(self, '_state_backup_timer'):
+                    self._state_backup_timer.stop()
+                self._flush_state_backup()
+            except Exception as e:
+                print(f"[State] Backup at close failed: {e}")
 
         event.accept()
 

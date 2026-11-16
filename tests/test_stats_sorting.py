@@ -17,27 +17,27 @@ NOW = 1_700_000_000
 GAMES = [
     {
         "title": "Neon Drift", "installed": True, "hours_total": 82.5,
-        "sessions": 18, "cost_per_hour": 0.48, "price_currency": "USD",
+        "sessions": 18, "yield_hours_per_dollar": 2.08, "reference_currency": "USD",
         "last_played": NOW - 3 * 86400,
     },
     {
         "title": "Ashen Circuit", "installed": True, "hours_total": 45.0,
-        "sessions": 9, "cost_per_hour": 0.56, "price_currency": "USD",
+        "sessions": 9, "yield_hours_per_dollar": 0.80, "reference_currency": "USD",
         "last_played": NOW - 5 * 86400,
     },
     {
         "title": "Void Garden", "installed": True, "hours_total": 27.0,
-        "sessions": 5, "cost_per_hour": 2.22, "price_currency": "USD",
+        "sessions": 5, "yield_hours_per_dollar": 0.45, "reference_currency": "USD",
         "last_played": NOW - 9 * 86400,
     },
     {
         "title": "Glass Harbor", "installed": False, "hours_total": 63.0,
-        "sessions": 12, "cost_per_hour": 0.50, "price_currency": "USD",
+        "sessions": 12, "yield_hours_per_dollar": 1.26, "reference_currency": "USD",
         "last_played": NOW - 1 * 86400,
     },
     {
         "title": "No Price", "installed": False, "hours_total": 0.0,
-        "sessions": 0, "cost_per_hour": None, "price_currency": "",
+        "sessions": 0, "yield_hours_per_dollar": None, "reference_currency": "",
         "last_played": 0,
     },
 ]
@@ -70,13 +70,13 @@ class StatsSortingTests(unittest.TestCase):
             ["No Price", "Void Garden", "Ashen Circuit", "Glass Harbor", "Neon Drift"],
         )
 
-    def test_value_orders_put_unknown_last(self):
+    def test_yield_orders_put_unknown_last(self):
         self.assertEqual(
-            titles(sort_games(GAMES, "value_best")),
+            titles(sort_games(GAMES, "yield_best")),
             ["Neon Drift", "Glass Harbor", "Ashen Circuit", "Void Garden", "No Price"],
         )
         self.assertEqual(
-            titles(sort_games(GAMES, "value_worst")),
+            titles(sort_games(GAMES, "yield_worst")),
             ["Void Garden", "Ashen Circuit", "Glass Harbor", "Neon Drift", "No Price"],
         )
 
@@ -96,19 +96,19 @@ class StatsSortingTests(unittest.TestCase):
 
     def test_sort_key_normalisation(self):
         self.assertEqual(normalize_sort_key("nope"), "installed_first")
-        self.assertEqual(sort_spec("value_best")["primary"], "value")
+        self.assertEqual(sort_spec("yield_best")["primary"], "yield")
         self.assertEqual(sort_spec("last_played_desc")["primary"], "last_played")
 
-    def test_bar_ratio_for_hours_and_value(self):
+    def test_bar_ratio_for_hours_and_yield(self):
         hours_context = bar_context(GAMES, "hours", now=NOW)
         self.assertAlmostEqual(bar_ratio(GAMES[0], "hours", hours_context), 1.0)
         self.assertAlmostEqual(bar_ratio(GAMES[2], "hours", hours_context), 27.0 / 82.5)
         self.assertEqual(bar_ratio(GAMES[-1], "hours", hours_context), 0.0)
 
-        value_context = bar_context(GAMES, "value", now=NOW)
-        self.assertAlmostEqual(bar_ratio(GAMES[0], "value", value_context), 1.0)
-        self.assertAlmostEqual(bar_ratio(GAMES[1], "value", value_context), 0.48 / 0.56)
-        self.assertEqual(bar_ratio(GAMES[-1], "value", value_context), 0.0)
+        yield_context = bar_context(GAMES, "yield", now=NOW)
+        self.assertAlmostEqual(bar_ratio(GAMES[0], "yield", yield_context), 1.0)
+        self.assertAlmostEqual(bar_ratio(GAMES[1], "yield", yield_context), 0.80 / 2.08)
+        self.assertEqual(bar_ratio(GAMES[-1], "yield", yield_context), 0.0)
 
     def test_bar_ratio_for_last_played_is_recency(self):
         context = bar_context(GAMES, "last_played", now=NOW)
@@ -120,16 +120,17 @@ class StatsSortingTests(unittest.TestCase):
 
     def test_primary_and_secondary_formatting(self):
         self.assertEqual(format_primary_value(GAMES[0], "hours", NOW), "82.5h")
-        self.assertEqual(format_primary_value(GAMES[0], "value", NOW), "$0.48/h")
+        self.assertEqual(format_primary_value(GAMES[0], "yield", NOW), "2.08 h/$")
         self.assertEqual(format_primary_value(GAMES[0], "sessions", NOW), "18")
         self.assertEqual(format_primary_value(GAMES[0], "last_played", NOW), "3d ago")
+        self.assertEqual(format_primary_value(GAMES[-1], "yield", NOW), "\u2014")
 
         playtime = sort_spec("playtime_desc")
         self.assertEqual(
             format_secondary_values(GAMES[0], playtime, NOW),
-            ["$0.48/h", "18 sess"],
+            ["2.08 h/$", "18 sess"],
         )
-        value = sort_spec("value_best")
+        value = sort_spec("yield_best")
         self.assertEqual(
             format_secondary_values(GAMES[0], value, NOW),
             ["82.5h", "18 sess"],

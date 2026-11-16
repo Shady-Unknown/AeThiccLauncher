@@ -80,6 +80,9 @@ jobs:
             main.py
           # Spostiamo il file compilato dalla cartella dist/ alla root
           cp dist/AeThiccLauncher aethicc-flatpak/AeThiccLauncher
+          # `cp -r src dest` nests into an existing dest: wipe first so a stale
+          # .media (missing icons/, fonts) can never reach the bundle.
+          rm -rf aethicc-flatpak/.media aethicc-flatpak/bin aethicc-flatpak/data aethicc-flatpak/lists
           cp -r .media aethicc-flatpak/.media
           cp -r bin aethicc-flatpak/bin
           mkdir -p aethicc-flatpak/data

@@ -6,18 +6,25 @@ from core.cover_cache import CoverCache
 
 
 class FeaturedImageWorker(QThread):
-    """Scarica (o recupera dalla cache) la featured image SteamRIP."""
+    """Prova una lista di URL panoramici e restituisce il primo disponibile."""
 
-    ready = pyqtSignal(str, str)  # url, path locale ("" se fallita)
+    ready = pyqtSignal(str, str)  # url, path locale ("" se tutti falliscono)
 
-    def __init__(self, url: str, parent=None):
+    def __init__(self, urls, parent=None):
         super().__init__(parent)
-        self._url = str(url or "")
+        if isinstance(urls, str):
+            urls = [urls]
+        self._urls = [str(url or "").strip() for url in (urls or [])]
+        self._urls = [url for url in self._urls if url]
 
     def run(self):
-        path = ""
-        try:
-            path = CoverCache.local_path_for(self._url) or ""
-        except Exception as exc:  # pragma: no cover - rete/filesystem
-            print(f"[Background] featured image failed: {exc}")
-        self.ready.emit(self._url, path)
+        for url in self._urls:
+            path = ""
+            try:
+                path = CoverCache.local_path_for(url, allow_placeholder=False) or ""
+            except Exception as exc:  # pragma: no cover - rete/filesystem
+                print(f"[Background] featured image failed for {url}: {exc}")
+            if path:
+                self.ready.emit(url, path)
+                return
+        self.ready.emit(self._urls[0] if self._urls else "", "")

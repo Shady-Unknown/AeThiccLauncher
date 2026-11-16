@@ -1,4 +1,4 @@
-"""Backup and merge for launcher-owned state (``plan.md`` §7).
+"""Backup and merge for launcher-owned state (``plans/roadmap.md`` §7).
 
 Only user state is backed up: sessions, install/usage/price history,
 achievements and Stats preferences. Caches, the Master Catalog, config.json and
@@ -54,21 +54,20 @@ def _write_json_atomic(path: Path, data) -> None:
 
 
 class StateBackupManager:
-    def __init__(self, state_dir=None, app_data_dir=None, sync_folder=None,
+    def __init__(self, state_dir=None, app_data_dir=None, backup_root=None,
                  keep_snapshots: int = 5):
         self.state_dir = Path(state_dir) if state_dir is not None else PathManager.get_stats_dir()
         self.app_data_dir = (Path(app_data_dir) if app_data_dir is not None
                              else PathManager.get_app_data_dir())
-        self.sync_folder = Path(sync_folder) if sync_folder else None
+        self.backup_root = (Path(backup_root) if backup_root
+                            else Path(PathManager.get_staging_dir()))
         self.keep_snapshots = max(1, int(keep_snapshots))
 
     # ------------------------------------------------------------------ paths
 
     @property
     def root(self) -> Path:
-        if self.sync_folder is None:
-            raise RuntimeError("State backups need a sync folder")
-        return self.sync_folder / BACKUP_ROOT
+        return self.backup_root / BACKUP_ROOT
 
     @property
     def current_dir(self) -> Path:
@@ -89,20 +88,40 @@ class StateBackupManager:
 
     @classmethod
     def enabled_for(cls, config: dict) -> bool:
+        """Launcher state lives in the local store, so only the toggle matters."""
         savegames = (config or {}).get("savegames", {}) or {}
-        sync_folder = str(savegames.get("sync_folder") or "").strip()
-        toggle = savegames.get("include_launcher_state", True)
-        return bool(sync_folder) and bool(toggle)
+        return bool(savegames.get("include_launcher_state", True))
 
     @classmethod
     def from_config(cls, config: dict, **kwargs):
-        savegames = (config or {}).get("savegames", {}) or {}
-        return cls(sync_folder=str(savegames.get("sync_folder") or "").strip() or None, **kwargs)
+        from core.paths import PathManager
+        return cls(backup_root=str(PathManager.get_staging_dir()), **kwargs)
+
+    # ---------------------------------------------------------------- status
+
+    def status(self) -> dict:
+        manifest = _read_json(self.current_dir / MANIFEST_FILE, {})
+        if not manifest:
+            manifest = _read_json(self.root / MANIFEST_FILE, {})
+        manifest = manifest if isinstance(manifest, dict) else {}
+        files = 0
+        if self.current_dir.is_dir():
+            files = sum(1 for path in self.current_dir.rglob("*") if path.is_file())
+        return {
+            "root": str(self.root),
+            "files": files,
+            "updated_at": int(manifest.get("updated_at") or 0),
+            "device_id": str(manifest.get("device_id") or ""),
+        }
 
     # --------------------------------------------------------------- manifest
 
     def _manifest(self, reset_at: int = 0) -> dict:
         previous = _read_json(self.root / MANIFEST_FILE, {})
+        if not isinstance(previous, dict) or not previous:
+            # ``write_current`` stores the manifest inside ``current/``; keep the
+            # device id stable across writes even without a root-level copy.
+            previous = _read_json(self.current_dir / MANIFEST_FILE, {})
         device_id = previous.get("device_id") if isinstance(previous, dict) else None
         if not device_id:
             device_id = uuid.uuid4().hex
@@ -141,8 +160,6 @@ class StateBackupManager:
     def snapshot(self, now=None, reset_at: int = 0) -> Path | None:
         """Copy ``current/`` into a timestamped snapshot and rotate old ones."""
         self.write_current()
-        if self.sync_folder is None:
-            return None
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime(int(now or time.time())))
         target = self.snapshots_dir / stamp
@@ -161,8 +178,6 @@ class StateBackupManager:
         return target
 
     def backup_now(self, now=None) -> Path | None:
-        if self.sync_folder is None:
-            return None
         return self.snapshot(now=now)
 
     # ---------------------------------------------------------------- restore

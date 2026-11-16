@@ -362,8 +362,13 @@ class DiscoveryManager(QObject):
         return time.time() - (entry.get("fetched_at") or 0) > ttl
 
     def _sync_folder(self):
-        cfg = getattr(self.mw, 'app_config', {}) or {}
-        return (cfg.get('savegames') or {}).get('sync_folder', '')
+        manager = getattr(self.mw, 'savegames_manager', None)
+        if manager is not None:
+            try:
+                return manager.get_sync_folder()
+            except Exception:
+                pass
+        return str(PathManager.get_staging_dir())
 
     # ── cache ────────────────────────────────────────────────────────
 

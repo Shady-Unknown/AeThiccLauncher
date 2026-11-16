@@ -34,6 +34,7 @@ FALLBACK_GLYPHS = {
 }
 
 _pixmap_cache: dict[tuple, QPixmap] = {}
+_missing_logged: set[str] = set()
 
 
 def icons_dir() -> str:
@@ -71,6 +72,9 @@ def spec_icon_pixmap(key: str, size: int = 26, color: QColor | str | None = None
     path = spec_icon_path(key)
     pixmap = QPixmap(path) if os.path.isfile(path) else QPixmap()
     if pixmap.isNull():
+        if key not in _missing_logged:
+            _missing_logged.add(key)
+            print(f"[Icons] missing icon '{key}': {path}")
         return QPixmap()
 
     target = max(1, int(round(size * dpr)))

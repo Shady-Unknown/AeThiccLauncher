@@ -63,6 +63,7 @@ from managers.background_scanner import BackgroundScanner
 from core.game_launcher import GameLauncher
 from core.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
+from core import secrets
 from core.events import (
     EVENT_BACKUP_CREATED,
     EVENT_IGDB_DETAILS_READY,
@@ -106,6 +107,7 @@ class SettingsController:
     def open_onboarding_wizard(self):
         from ui.dialogs.onboarding_wizard import OnboardingWizard
 
+        had_igdb = secrets.has_igdb_credentials()
         wizard = OnboardingWizard(self.app_config, self)
         if wizard.exec() != QDialog.DialogCode.Accepted:
             return False
@@ -120,7 +122,23 @@ class SettingsController:
             self._restart_application()
             return True
         self.update_entire_config(wizard.config)
+        self._offer_restart_for_api_keys(had_igdb)
         return True
+
+    def _offer_restart_for_api_keys(self, had_igdb: bool):
+        """The IGDB rows are built at startup, so new keys need a restart."""
+        if had_igdb or not secrets.has_igdb_credentials():
+            return
+        reply = QMessageBox.question(
+            self,
+            "Restart required",
+            "IGDB is now configured. Trending and New Releases only appear "
+            "after a restart.\n\nRestart the launcher now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._restart_application()
 
     def _restart_application(self):
         try:
@@ -232,12 +250,86 @@ class SettingsController:
             QTimer.singleShot(50, lambda: self.display_game_data(self.current_game_data))
 
     def open_settings_dialog(self):
-        dialog = SettingsDialog(self.app_config, self)
+        status = {}
+        if hasattr(self, 'backup_service'):
+            try:
+                status = self.backup_service.state_status()
+            except Exception as exc:
+                print(f"[State] status failed: {exc}")
+        had_igdb = secrets.has_igdb_credentials()
+        dialog = SettingsDialog(self.app_config, self, state_backup_status=status)
         dialog.config_saved.connect(self.update_entire_config)
+        dialog.state_backup_requested.connect(self._backup_launcher_state_now)
+        dialog.state_restore_requested.connect(self._restore_launcher_state)
         dialog.exec()
+        self._offer_restart_for_api_keys(had_igdb)
         if getattr(dialog, "run_wizard_after_close", False):
             self._onboarding_prompted = False
             self.open_onboarding_wizard()
+
+    def _backup_launcher_state_now(self):
+        service = getattr(self, 'backup_service', None)
+        if service is None:
+            QMessageBox.warning(self, "Launcher Data", "Backup service is not available.")
+            return
+        result = service.backup_state(push=True)
+        if not result.get('ok'):
+            reason = result.get('reason') or result.get('detail') or "unknown error"
+            QMessageBox.warning(
+                self, "Launcher Data Backup",
+                "The launcher data could not be backed up:\n{}".format(reason),
+            )
+            return
+        mirror = result.get('mirror') or {}
+        mirror_text = ""
+        if mirror.get('configured'):
+            mirror_text = "\nMirror: {} file(s) copied.".format(mirror.get('copied', 0))
+        QMessageBox.information(
+            self, "Launcher Data Backup",
+            "Launcher data saved to:\n{}{}".format(result.get('root', ''), mirror_text),
+        )
+
+    def _restore_launcher_state(self):
+        service = getattr(self, 'backup_service', None)
+        if service is None:
+            QMessageBox.warning(self, "Launcher Data", "Backup service is not available.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Restore Launcher Data",
+            "Restore achievements, stats and preferences from the backup?\n\n"
+            "The merge is additive: local data wins on conflicts and nothing is deleted.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        result = service.restore_state()
+        if result.get('reason') == 'not_configured' or not result.get('files'):
+            QMessageBox.information(
+                self, "Restore Launcher Data",
+                "No launcher data backup found. Run a launcher data backup first.",
+            )
+            return
+
+        if hasattr(self, 'stats_manager'):
+            self.stats_manager.invalidate()
+        if hasattr(self, 'achievements_manager'):
+            self.achievements_manager.reload()
+        if hasattr(self, 'stats_tab'):
+            self.stats_tab.refresh()
+        if hasattr(self, 'achievements_tab'):
+            self.achievements_tab.refresh()
+
+        QMessageBox.information(
+            self, "Restore Launcher Data",
+            "Restored {} file(s): {} new record(s), {} new achievement(s).".format(
+                result.get('files', 0),
+                result.get('jsonl_added', 0),
+                result.get('achievements_added', 0),
+            ),
+        )
 
     def update_entire_config(self, new_config):
         from core.paths import PathManager
@@ -254,12 +346,15 @@ class SettingsController:
         self.lib_manager.scan_library()
         if hasattr(self, 'tab_discovery'):
             self.tab_discovery.refresh_library()
+            self.tab_discovery.refresh_config_notice()
         if hasattr(self, 'savegames_tab'):
             self.savegames_tab.app_config = self.app_config
             self.savegames_tab.refresh_view()
         if hasattr(self, 'stats_tab'):
             self.stats_tab.refresh()
         self.start_savegames_timer()
+        if hasattr(self, 'schedule_state_backup'):
+            self.schedule_state_backup()
 
     def get_savegames_interval_ms(self):
         cfg = self.app_config.get('savegames', {})
@@ -271,9 +366,6 @@ class SettingsController:
 
     def start_savegames_timer(self):
         self.savegames_timer.stop()
-        sync_folder = self.app_config.get('savegames', {}).get('sync_folder', '').strip()
-        if not sync_folder:
-            return
         interval_ms = self.get_savegames_interval_ms()
         self.savegames_timer.setInterval(interval_ms)
         self.savegames_timer.start()
@@ -300,12 +392,14 @@ class SettingsController:
             except Exception as e:
                 print(f"[Playtime] Errore sync programmata: {e}")
         if hasattr(self, 'savegames_tab'):
+            created = summary.get('synced_games', 0)
+            unchanged = summary.get('unchanged_games', 0)
             if summary.get('errors'):
                 self.savegames_tab.message_label.setText(
                     f"Auto-sync completed with warnings: {len(summary['errors'])} issue(s)."
                 )
             else:
                 self.savegames_tab.message_label.setText(
-                    f"Auto-sync completed successfully: {summary.get('synced_games', 0)} game(s)."
+                    f"Auto-sync completed: {created} new snapshot(s), {unchanged} unchanged."
                 )
             self.savegames_tab.refresh_view()

@@ -1,7 +1,7 @@
 """User-state store: sessions, install history, usage and price history.
 
 The store is a plain subscriber on the :class:`core.events.EventBus`; it knows
-nothing about the UI. It owns the JSONL files described in ``plan.md`` §6 and
+nothing about the UI. It owns the JSONL files described in ``plans/roadmap.md`` §6 and
 keeps a small crash-recovery marker for game sessions.
 
 All writes go through :class:`core.jsonl_store.JsonlStore` (append + atomic

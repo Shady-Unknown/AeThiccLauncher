@@ -41,6 +41,20 @@ def extract_steam_id_from_store_url(url):
     return m.group(1) if m else ""
 
 
+def is_local_install(meta):
+    """True for installs that did not come from SteamRIP (or have no source).
+
+    An explicit ``is_local`` flag wins; otherwise a missing/invalid
+    ``source_url`` marks the game as a local install. Orphans are never local.
+    """
+    if not meta or meta.get('is_orphan'):
+        return False
+    if meta.get('is_local') is True:
+        return True
+    url = str(meta.get('source_url') or '').strip()
+    return not url or url == 'N/A'
+
+
 def save_steamrip_meta(install_dir, meta):
     """Shared utility to write steamrip_meta.json.
 

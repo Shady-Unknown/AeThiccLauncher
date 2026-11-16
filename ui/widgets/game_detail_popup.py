@@ -943,8 +943,7 @@ class GameDetailPopup(QWidget):
                 return
         sync = ""
         try:
-            sync = (self.mw.app_config.get("savegames", {}) or {}).get(
-                "sync_folder", "")
+            sync = self.mw.savegames_manager.get_sync_folder()
         except Exception:
             sync = ""
         file_url = MiniCoverManager.persist_pixmap(self._title, pixmap, sync)
@@ -966,7 +965,7 @@ class GameDetailPopup(QWidget):
         installed = getattr(self.mw, "installed_games", {}) or {}
         sync = ""
         try:
-            sync = (self.mw.app_config.get("savegames", {}) or {}).get("sync_folder", "")
+            sync = self.mw.savegames_manager.get_sync_folder()
         except Exception:
             sync = ""
         path = MiniCoverManager.resolve_cover_path(self._title, installed, sync)

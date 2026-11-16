@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 
+from core.game_version import normalize_label
+
 
 MONTHS = (
     "January", "February", "March", "April", "May", "June",
@@ -36,9 +38,40 @@ STATE_UPDATED = "updated"                                # tutto allineato
 STATE_VERSION_ONLY = "version_only"                      # niente build tracking
 STATE_UNKNOWN = "unknown"                                # dati assenti
 
+#: Un build id plausibile è solo un numero: 4-10 cifre, nessun punto o lettera.
+_BUILD_ID_RE = re.compile(r"^\d{4,10}$")
+_BUILD_ID_MIN = 1000
+_BUILD_ID_MAX = 9_999_999_999
+
 
 def _clean_text(value):
     return re.sub(r"\s+", " ", (value or "")).strip()
+
+
+def classify_build(value):
+    """``"buildid"`` for a plain numeric build, ``"label"`` for a version text.
+
+    SteamRIP sometimes puts a version such as ``v0.1.0.0.14530`` in the same
+    field that elsewhere holds a build id. Turning those digits into an integer
+    produces numbers that can never be compared with a real build.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return "buildid" if _BUILD_ID_MIN <= value <= _BUILD_ID_MAX else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if _BUILD_ID_RE.match(text):
+        return "buildid"
+    return "label"
+
+
+def as_build(value):
+    """The int build id when ``value`` is one, ``None`` otherwise."""
+    if classify_build(value) != "buildid":
+        return None
+    return int(str(value).strip())
 
 
 def _to_int(value):
@@ -97,7 +130,7 @@ def parse_version_status_html(html):
         "label": _clean_text(label_el.get_text(strip=True)) if label_el else "",
         "color": color or "grey",
         "header": _clean_text(title_el.get_text(strip=True)) if title_el else "",
-        "posted_build": _to_int(wrapper.get("data-svchk-build")),
+        "posted_build": as_build(wrapper.get("data-svchk-build")),
         "posted_build_date": "",
         "steam_build": None,
         "steam_build_date": "",
@@ -109,6 +142,11 @@ def parse_version_status_html(html):
         "steamdb_url": "",
     }
 
+    # A version string in the build attribute (or row) must not become a build.
+    widget_build = wrapper.get("data-svchk-build")
+    if data["posted_build"] is None and classify_build(widget_build) == "label":
+        data["posted_version"] = _clean_text(str(widget_build))
+
     for row in wrapper.find_all(class_="svchk__row"):
         key_el = row.find(class_="svchk__key")
         key = _clean_text(key_el.get_text(strip=True)).lower() if key_el else ""
@@ -118,10 +156,14 @@ def parse_version_status_html(html):
         date = _clean_text(date_el.get_text(" ", strip=True)) if date_el else ""
 
         if "posted build" in key:
-            data["posted_build"] = _to_int(value) or data["posted_build"]
-            data["posted_build_date"] = date
+            build = as_build(value)
+            if build is not None:
+                data["posted_build"] = build
+                data["posted_build_date"] = date
+            elif value and not data["posted_version"]:
+                data["posted_version"] = value
         elif "steam latest" in key:
-            data["steam_build"] = _to_int(value)
+            data["steam_build"] = as_build(value)
             data["steam_build_date"] = date
         elif "posted version" in key:
             data["posted_version"] = value
@@ -184,7 +226,7 @@ def fetch_steam_latest_build(app_id, timeout=5):
         payload = response.json()
         app_data = (payload.get("data") or {}).get(app_id) or {}
         public = ((app_data.get("depots") or {}).get("branches") or {}).get("public") or {}
-        build = _to_int(public.get("buildid"))
+        build = as_build(public.get("buildid"))
         timestamp = _to_int(public.get("timeupdated")) or 0
         if not build:
             return None
@@ -213,12 +255,20 @@ def compute_version_state(
     Calcola lo stato di aggiornamento combinando i tre build.
 
     Ritorna {'state': str, 'ok': bool|None, 'reason': str}.
+
+    I build vengono normalizzati qui: un valore che non è un build id (per
+    esempio una versione come ``v0.1.0.0.14530``) non partecipa ai confronti
+    numerici e non può produrre un falso "Steam ahead".
     """
     def result(state, ok=None, reason=""):
         return {"state": state, "ok": ok, "reason": reason}
 
     if not has_status:
         return result(STATE_UNKNOWN, None, "no_status")
+
+    installed_build = as_build(installed_build)
+    posted_build = as_build(posted_build)
+    steam_build = as_build(steam_build)
 
     if posted_build:
         if is_installed:
@@ -230,8 +280,10 @@ def compute_version_state(
                 return result(STATE_UPDATED, True, "all_aligned")
 
             # Build installata sconosciuta: fallback al confronto versione
-            if installed_version and posted_version_text:
-                if installed_version != posted_version_text:
+            installed_label = normalize_label(installed_version)
+            site_label = normalize_label(posted_version_text)
+            if installed_label and site_label:
+                if installed_label != site_label:
                     return result(STATE_UPDATE_AVAILABLE, False, "version_mismatch")
                 return result(STATE_VERSION_ONLY, True, "version_aligned")
             return result(STATE_UNKNOWN, None, "installed_build_unknown")
@@ -244,7 +296,9 @@ def compute_version_state(
     # Variante senza tracking build (purple "Version: vX")
     site_version = posted_version_only or posted_version_text
     if site_version:
-        if is_installed and installed_version and installed_version != site_version:
+        site_label = normalize_label(site_version)
+        installed_label = normalize_label(installed_version)
+        if is_installed and site_label and installed_label and site_label != installed_label:
             return result(STATE_UPDATE_AVAILABLE, False, "version_mismatch")
         return result(STATE_VERSION_ONLY, True, "version_only")
     return result(STATE_UNKNOWN, None, "no_build_info")

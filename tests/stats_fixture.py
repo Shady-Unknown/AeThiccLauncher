@@ -187,6 +187,11 @@ def build_stub_snapshot(range_key="90d", region="US", now=None):
             game["price_cents"] / 100.0 / game["hours_total"]
             if game["hours_total"] > 0 else None
         )
+        game.setdefault("reference_cents", game["price_cents"])
+        game["yield_hours_per_dollar"] = (
+            game["hours_total"] / (game["reference_cents"] / 100.0)
+            if game.get("reference_cents") and game["hours_total"] > 0 else None
+        )
 
     played = [g for g in games if g["hours_total"] > 0]
     installed = [g for g in games if g["installed"]]
@@ -205,6 +210,13 @@ def build_stub_snapshot(range_key="90d", region="US", now=None):
     avg_cost = (
         sum(g["price_cents"] for g in played_known) / 100.0 / known_hours
         if known_hours > 0 else None
+    )
+    yield_reference = sum(
+        g["reference_cents"] for g in played_known if g.get("reference_cents")
+    )
+    avg_yield = (
+        sum(g["hours_total"] for g in played_known) / (yield_reference / 100.0)
+        if yield_reference > 0 else None
     )
 
     developers = {}
@@ -259,6 +271,7 @@ def build_stub_snapshot(range_key="90d", region="US", now=None):
                 "minutes": 195.0,
             },
             "avg_cost_per_hour": round(avg_cost, 2) if avg_cost is not None else None,
+            "avg_yield": round(avg_yield, 2) if avg_yield is not None else None,
             "library_value_cents": library_value,
             "current_streak": 4,
             "best_streak": 9,

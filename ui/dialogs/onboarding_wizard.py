@@ -15,8 +15,9 @@ write next to the executable: on Flatpak ``/app`` is read-only, so the data
 root defaults to the sandbox data dir and the bootstrap file falls back to it.
 
 Cross-platform notes:
-- drive enumeration uses ``psutil.disk_partitions`` with a fallback list that
-  also works inside a sandbox (``/``, ``$HOME``, ``/mnt``, ``/media``, ``/run/media``);
+- folders are chosen with the native file dialog only: enumerating mount
+  points is unreliable (btrfs subvolumes and bind mounts such as ``/etc/*`` or
+  ``/var/lib/docker`` show up as user drives on some distributions);
 - every destination is validated by creating and deleting a probe file, which
   is reliable on Linux even when ``os.access`` is misleading.
 """
@@ -27,16 +28,13 @@ import shutil
 import sys
 from pathlib import Path
 
-import psutil
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -86,31 +84,6 @@ def _free_space(path) -> str:
         return _fmt_bytes(shutil.disk_usage(str(path)).free)
     except OSError:
         return "?"
-
-
-def _candidate_roots() -> list[str]:
-    roots: list[str] = []
-    try:
-        parts = psutil.disk_partitions(all=False)
-    except Exception:
-        parts = []
-    for part in parts:
-        mount = part.mountpoint
-        if not mount:
-            continue
-        if "cdrom" in (part.opts or "") or part.fstype in ("", "squashfs"):
-            continue
-        if os.path.isdir(mount):
-            roots.append(mount)
-    # Sandbox / Flatpak fallbacks: the physical list can be incomplete.
-    for extra in ("/", str(Path.home()), "/mnt", "/media", "/run/media"):
-        if os.path.isdir(extra):
-            roots.append(extra)
-    # Windows system dirs are never useful as a library root.
-    deduped = list(dict.fromkeys(roots))
-    if WIN:
-        deduped = [r for r in deduped if not r.lower().startswith(("c:\\windows",))]
-    return deduped
 
 
 def default_data_root() -> str:
@@ -214,53 +187,26 @@ class _LibrariesPage(_Page):
         layout.addWidget(self.list)
 
         buttons = QHBoxLayout()
-        btn_existing = QPushButton("Add existing…")
+        btn_existing = QPushButton("Add folder…")
         btn_existing.clicked.connect(self._add_existing)
-        btn_create = QPushButton("Create on drive…")
-        btn_create.clicked.connect(self._create_on_drive)
         btn_default = QPushButton("Set as default")
         btn_default.clicked.connect(self._set_default)
         btn_remove = QPushButton("Remove")
         btn_remove.clicked.connect(self._remove)
-        for btn in (btn_existing, btn_create, btn_default, btn_remove):
+        for btn in (btn_existing, btn_default, btn_remove):
             buttons.addWidget(btn)
         buttons.addStretch(1)
         layout.addLayout(buttons)
-
-        drive_row = QHBoxLayout()
-        drive_row.addWidget(QLabel("Drive:"))
-        self.combo = QComboBox()
-        for root in _candidate_roots():
-            self.combo.addItem(f"{root} — {_free_space(root)} free", root)
-        drive_row.addWidget(self.combo, 1)
-        layout.addLayout(drive_row)
 
         self._refresh()
 
     # ── actions ──
 
     def _add_existing(self):
-        folder = QFileDialog.getExistingDirectory(self, "Add existing library")
+        folder = QFileDialog.getExistingDirectory(self, "Add game library")
         if not folder:
             return
         self.wiz._add_library(folder)
-        self._refresh()
-
-    def _create_on_drive(self):
-        root = self.combo.currentData() or self.combo.currentText()
-        if not root:
-            return
-        name, ok = QInputDialog.getText(
-            self, "New library", "Library folder name:", text="AeThiccLibrary"
-        )
-        if not ok or not name.strip():
-            return
-        target = os.path.join(root, name.strip())
-        if not _is_writable(target):
-            QMessageBox.warning(self, "Not writable",
-                                f"Cannot create the library in:\n{target}")
-            return
-        self.wiz._add_library(target)
         self._refresh()
 
     def _current_path(self):
@@ -331,7 +277,7 @@ class _FoldersPage(_Page):
     def __init__(self, wizard):
         super().__init__(wizard)
         self.setTitle("Downloads & savegames")
-        self.setSubTitle("Temporary/download folder and savegame sync folder.")
+        self.setSubTitle("Temporary/download folder and an optional savegame mirror folder.")
         layout = QFormLayout(self)
 
         self.txt_temp = QLineEdit()
@@ -340,11 +286,14 @@ class _FoldersPage(_Page):
 
         self.txt_saves = QLineEdit()
         self.txt_saves.textChanged.connect(lambda *_: self.completeChanged.emit())
-        layout.addRow("Savegames sync folder:", self._with_browse(self.txt_saves, "saves"))
+        layout.addRow("Savegames mirror folder (optional):",
+                      self._with_browse(self.txt_saves, "saves"))
 
         hint = QLabel(
-            "The temp folder holds downloads before extraction; the savegames "
-            "folder keeps the last synced snapshots."
+            "The temp folder holds downloads before extraction. Savegame snapshots are "
+            "always stored in the launcher data folder; set a mirror folder to keep a "
+            "second copy on another drive or in a folder synced by Google Drive/Syncthing. "
+            "Leave it empty to keep only the local copy."
         )
         hint.setWordWrap(True)
         layout.addRow(hint)
@@ -368,14 +317,15 @@ class _FoldersPage(_Page):
         root = Path(self.wiz._data_root)
         if not self.txt_temp.text():
             self.txt_temp.setText(str(root / "Temp"))
-        if not self.txt_saves.text():
-            self.txt_saves.setText(str(root / "Savegames"))
 
     def isComplete(self):
-        return bool(self.txt_temp.text().strip()) and bool(self.txt_saves.text().strip())
+        return bool(self.txt_temp.text().strip())
 
     def validatePage(self):
-        for label, value in (("temp", self.txt_temp.text()), ("savegames", self.txt_saves.text())):
+        checks = [("temp", self.txt_temp.text())]
+        if self.txt_saves.text().strip():
+            checks.append(("mirror", self.txt_saves.text()))
+        for label, value in checks:
             if not _is_writable(value.strip()):
                 QMessageBox.warning(self, "Not writable",
                                     f"The {label} folder is not writable:\n{value}")
@@ -467,7 +417,7 @@ class _SummaryPage(_Page):
             f"<b>Libraries:</b><br>{libs}<br>"
             f"<b>Default library:</b> {default}<br><br>"
             f"<b>Temp folder:</b><br>&nbsp;&nbsp;{self.wiz._temp}<br><br>"
-            f"<b>Savegames folder:</b><br>&nbsp;&nbsp;{self.wiz._saves}<br><br>"
+            f"<b>Savegames mirror folder:</b><br>&nbsp;&nbsp;{self.wiz._saves or 'not configured (optional)'}<br><br>"
             f"<b>SteamGridDB key:</b> {sgdb}<br>"
             f"<b>IGDB credentials:</b> {igdb}"
         )

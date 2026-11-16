@@ -18,6 +18,7 @@ PERSISTENT_META_KEYS = (
     "savegame_path_win",
     "savegame_path_linux",
     "savegame_path_custom",
+    "savegame_path_source",
     "savegame_scan_state",
     "steam_shortcut_id",
     "steam_grid_id",

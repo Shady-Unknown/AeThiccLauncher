@@ -164,6 +164,7 @@ class StatsManagerTests(unittest.TestCase):
         self.assertEqual(hero["longest_session"]["title"], "Game B")
         self.assertAlmostEqual(hero["longest_session"]["minutes"], 120.0)
         self.assertAlmostEqual(hero["avg_cost_per_hour"], 20.0 / 3.0)
+        self.assertAlmostEqual(hero["avg_yield"], 0.1)
         self.assertEqual(hero["library_value_cents"], 3000)
         self.assertEqual(hero["current_streak"], 3)
         self.assertEqual(hero["best_streak"], 3)
@@ -185,6 +186,8 @@ class StatsManagerTests(unittest.TestCase):
         self.assertAlmostEqual(game_a["avg_session_minutes"], 60.0)
         self.assertEqual(game_a["price_cents"], 2000)
         self.assertAlmostEqual(game_a["cost_per_hour"], 20.0 / 3.0)
+        self.assertEqual(game_a["reference_cents"], 3000)
+        self.assertAlmostEqual(game_a["yield_hours_per_dollar"], 0.1)
         self.assertTrue(game_a["gold_tier"])
         self.assertEqual(game_a["genres"], ["RPG"])
         self.assertEqual(game_a["developers"], ["Dev A"])
@@ -201,6 +204,8 @@ class StatsManagerTests(unittest.TestCase):
         self.assertEqual(game_c["price_cents"], 1000)
         self.assertEqual(game_c["price_store"], "steam")
         self.assertIsNone(game_c["cost_per_hour"])
+        self.assertIsNone(game_c["yield_hours_per_dollar"])
+        self.assertEqual(game_c["reference_cents"], 1000)
 
         self.assertEqual([g["title"] for g in snapshot["top_games"]], ["Game A", "Game B"])
         self.assertEqual([d["name"] for d in snapshot["developers"]], ["Dev A", "Dev B"])
@@ -324,6 +329,49 @@ class StatsManagerCacheRefreshTests(unittest.TestCase):
             config=lambda: {"stats": {}},
         )
         self.assertEqual(stats["max_titles_by_developer"], 2)
+
+
+class ReferencePriceTests(unittest.TestCase):
+    """The entertainment yield uses the ordinary price, never the sale one."""
+
+    def test_sale_keeps_the_initial_price_as_reference(self):
+        price = StatsManager._price_from_data(
+            {
+                "final_cents": 600,
+                "initial_cents": 6000,
+                "on_sale": True,
+                "discount_percent": 90,
+                "currency": "USD",
+            },
+            "steam",
+            "US",
+        )
+        self.assertEqual(price["cents"], 600)
+        self.assertEqual(price["reference_cents"], 6000)
+
+    def test_full_price_is_the_reference_when_initial_is_missing(self):
+        price = StatsManager._price_from_data(
+            {"final_cents": 2000, "on_sale": False},
+            "steam",
+            "US",
+        )
+        self.assertEqual(price["reference_cents"], 2000)
+
+    def test_sale_without_initial_price_has_no_reference(self):
+        price = StatsManager._price_from_data(
+            {"final_cents": 1500, "on_sale": True},
+            "steam",
+            "US",
+        )
+        self.assertIsNone(price["reference_cents"])
+
+    def test_free_game_has_no_reference(self):
+        price = StatsManager._price_from_data(
+            {"final_cents": 0, "initial_cents": 0, "on_sale": False},
+            "steam",
+            "US",
+        )
+        self.assertIsNone(price["reference_cents"])
 
 
 if __name__ == "__main__":

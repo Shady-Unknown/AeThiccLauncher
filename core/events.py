@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-# --- Event names (keep in sync with plan.md §14) -------------------------
+# --- Event names (keep in sync with plans/roadmap.md §14) -----------------
 EVENT_LAUNCHER_START = "launcher_start"
 EVENT_GAME_LAUNCHED = "game_launched"
 EVENT_SESSION_END = "session_end"

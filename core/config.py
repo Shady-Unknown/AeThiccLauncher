@@ -69,7 +69,9 @@ DEFAULT_CONFIG = {
     "savegames": {
         "sync_folder": "",
         "sync_interval": 30,
-        "sync_unit": "minutes"
+        "sync_unit": "minutes",
+        "keep_snapshots": 5,
+        "include_launcher_state": True
     },
     "auto_extract": False,
     "default_temp_folder": "",                # Sezione cartella temporanea
@@ -190,7 +192,7 @@ def get_stylesheet(theme_data):
         }}
         QWidget {{ 
             color: {theme_data.get('text_primary_white', '#ffffff')}; 
-            font-family: 'Segoe UI', Arial; 
+            font-family: 'Segoe UI', 'Inter', 'Noto Sans', 'DejaVu Sans', 'Noto Emoji', Arial; 
         }}
         
         QScrollArea, QListWidget, QTreeWidget {{
