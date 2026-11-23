@@ -2,6 +2,17 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## v1.9.6 — 2026-11-24
+
+### Trailers
+- Trailer downloads fetch the HLS segments with eight parallel connections and remux them locally, so a 1080p trailer is ready in about a second. The download defaults to 1080p, the quality menu drives it, the progress bar appears only after Play, a stale URL is refreshed once, and the cache is capped at 1 GB (least-recently-used eviction).
+
+### Fixed
+- **Linux emoji:** colour emoji icons thanks to a bundled COLRv0 Twemoji font; the COLRv1 system font that Qt cannot render is rejected.
+- **Discovery covers:** cards no longer wait for the rate-limited SteamGridDB name lookup: the SteamRip page URL is used for the featured image and the IGDB cover is retried when the metadata arrives.
+- **Scrollbars:** clicking the scrollbar track jumps the handle to the clicked position.
+- **Linux tests:** the unittest suite is green on Linux too.
+
 ## v1.9.5 — 2026-11-16
 
 ### Discovery

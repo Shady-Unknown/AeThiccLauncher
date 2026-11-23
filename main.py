@@ -49,7 +49,10 @@ def _log_unhandled_exception(exc_type, exc, tb):
 
 sys.excepthook = _log_unhandled_exception
 
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QDialog
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QLabel, QDialog,
+    QProxyStyle, QStyle,
+)
 from PyQt6.QtGui import QIcon, QPixmap, QFontDatabase
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 
@@ -66,6 +69,21 @@ logging.getLogger("startup").info("[STARTUP] Ae Thicc Launcher %s", __version__)
 _phase("imports + logging ready")
 
 from ui.main_window import AppWindow
+
+
+class _AbsoluteScrollBarStyle(QProxyStyle):
+    """Left-clicking a scrollbar groove jumps to the clicked position.
+
+    Qt's default pages by a screen; most users expect the handle to teleport
+    under the cursor (the usual way to scroll long lists). ``SH_ScrollBar_
+    LeftClickAbsolutePosition`` turns that on for every scrollbar in the app,
+    including the ones themed by the app stylesheet.
+    """
+
+    def styleHint(self, hint, option=None, widget=None, return_data=None):
+        if hint == QStyle.StyleHint.SH_ScrollBar_LeftClickAbsolutePosition:
+            return 1
+        return super().styleHint(hint, option, widget, return_data)
 
 
 def _on_fuse_fs(path: str) -> bool:
@@ -183,6 +201,7 @@ if __name__ == "__main__":
             os.environ.setdefault("FONTCONFIG_FILE", fontconfig_conf)
 
     app = QApplication(sys.argv)
+    app.setStyle(_AbsoluteScrollBarStyle(app.style()))
     app.setApplicationName("AeThiccLauncher")
     if sys.platform.startswith("linux"):
         # Wayland takes the window/taskbar icon from the .desktop entry that

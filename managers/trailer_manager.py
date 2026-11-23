@@ -57,6 +57,7 @@ class TrailerManager:
             "mp4": mp4,
             "webm": entry.get("webm"),
             "variants": entry.get("variants"),
+            "appid": str(appid),
         }
 
     @staticmethod
@@ -72,8 +73,20 @@ class TrailerManager:
             "mp4": trailer.get("mp4"),
             "webm": trailer.get("webm"),
             "variants": trailer.get("variants"),
+            "appid": str(appid),
         }
         TrailerManager.save_cache(cache)
+
+    @staticmethod
+    def remove(appid, cache=None):
+        """Drop a cached trailer resolution (used when its HLS URL expired)."""
+        if not appid:
+            return
+        if cache is None:
+            cache = TrailerManager.load_cache()
+        if str(appid) in cache:
+            cache.pop(str(appid), None)
+            TrailerManager.save_cache(cache)
 
     @staticmethod
     def is_fresh(appid, cache=None):

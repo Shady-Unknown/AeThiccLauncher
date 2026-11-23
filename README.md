@@ -8,7 +8,7 @@
 
 **Ae Thicc Launcher** is an unofficial desktop client for SteamRIP: browse the catalogue like a streaming service, download and update games, keep every savegame backed up, and see what you actually play.
 
-**Not just another downloader.** Games deserve to outlive storefronts: keep what you can't buy anymore — or can't afford yet — playable, keep the saves that make it yours, and **pay for the games that respect you**.
+**Not just another downloader.** Games deserve to outlive storefronts: keep what you can't buy anymore (or can't afford yet) playable, keep the saves that make it yours, and **pay for the games that respect you**.
 
 It runs on Windows and Linux (including Steam Deck and Flatpak), keeps its data local, and works without any bundled API key. Optional SteamGridDB/IGDB keys unlock extra artwork and the two IGDB shelves.
 
@@ -83,10 +83,10 @@ Defaults:
 
 On first run the wizard asks for:
 
-- **Data & cache folder** — config, catalog, covers, stats, logs and temp files.
-- **Game libraries** — one or more folders scanned for installed games and offered as install destinations (the default `SteamRip` folder is preselected, and you can add one on another drive).
+- **Data & cache folder:** config, catalog, covers, stats, logs and temp files.
+- **Game libraries:** one or more folders scanned for installed games and offered as install destinations (the default `SteamRip` folder is preselected, and you can add one on another drive).
 
-You can change them later from **Settings → Run setup wizard**. A bootstrap file `aethicc.paths.json` records a data root only when you move it away from the default; if the install folder is read-only (for example `/app` inside Flatpak, or `Program Files` on Windows) it is written to the user data directory instead. Existing data in the old location is offered as an optional copy — nothing is deleted.
+You can change them later from **Settings → Run setup wizard**. A bootstrap file `aethicc.paths.json` records a data root only when you move it away from the default; if the install folder is read-only (for example `/app` inside Flatpak, or `Program Files` on Windows) it is written to the user data directory instead. Existing data in the old location is offered as an optional copy (nothing is deleted).
 
 ## Key features
 
@@ -95,9 +95,9 @@ You can change them later from **Settings → Run setup wizard**. A bootstrap fi
 *   **Doomscroll the catalog:** a single-row horizontal scroller that never ends. Pick a category, keep scrolling, find the game you'll install at 3 AM.
 *   **Per-category browsing:** Trending, New Releases, Recently Added, Recently Updated and every SteamRIP category, one at a time, with a jump selector when you already know where to go.
 *   **Search anything:** type a few characters and get one row with every matching game across the whole catalog.
-*   **All games:** the entire catalog in one endless row, newest SteamRip releases first — nothing is left out, even the oldest titles.
+*   **All games:** the entire catalog in one endless row, newest SteamRip releases first: nothing is left out, even the oldest titles.
 *   **Sort where it makes sense:** Trending and My Library can be ordered by title, SteamRip added date, release date or rating. Date-based rows (New Releases, Recently Added/Updated, the SteamRIP categories and All Games) always keep their own order.
-*   **Game cards:** one click opens the full sheet — cover, rating, genres, themes, game modes, developer, publisher, platforms, description, PEGI/ESRB age ratings and SteamRIP vs Steam build.
+*   **Game cards:** one click opens the full sheet: cover, rating, genres, themes, game modes, developer, publisher, platforms, description, PEGI/ESRB age ratings and SteamRIP vs Steam build.
 *   **Install in one click:** the *Install* button opens the game in the Games Explorer with its download links ready.
 *   **Built-in trailer player:** fullscreen, volume, mute and smooth seeking; trailers are cached locally, so repeat views start instantly.
 
@@ -149,19 +149,19 @@ A quick tour of the launcher. Click a shot to open it full size.
 
 <table>
   <tr>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/01-discovery.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/01-discovery.jpg" alt="Discovery: trending, new releases and every SteamRIP shelf"></a><br><b>Discovery</b> — Trending, new releases and every SteamRIP shelf</td>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/02-explorer.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/02-explorer.jpg" alt="Explorer: search, game sheet, hosts and version status"></a><br><b>Explorer</b> — Search, game sheet, hosts and version status</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/01-discovery.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/01-discovery.jpg" alt="Discovery: trending, new releases and every SteamRIP shelf"></a><br><b>Discovery</b>: Trending, new releases and every SteamRIP shelf</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/02-explorer.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/02-explorer.jpg" alt="Explorer: search, game sheet, hosts and version status"></a><br><b>Explorer</b>: Search, game sheet, hosts and version status</td>
   </tr>
   <tr>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/03-gold-tier.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/03-gold-tier.jpg" alt="Gold Tier: community-verified studios and quality picks"></a><br><b>Gold Tier</b> — Community-verified studios and quality picks</td>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/04-downloads.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/04-downloads.jpg" alt="Downloads: queue, speed graph and automatic extraction"></a><br><b>Downloads</b> — Queue, speed graph and automatic extraction</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/03-gold-tier.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/03-gold-tier.jpg" alt="Gold Tier: community-verified studios and quality picks"></a><br><b>Gold Tier</b>: Community-verified studios and quality picks</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/04-downloads.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/04-downloads.jpg" alt="Downloads: queue, speed graph and automatic extraction"></a><br><b>Downloads</b>: Queue, speed graph and automatic extraction</td>
   </tr>
   <tr>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/05-savegames.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/05-savegames.jpg" alt="Savegames: versioned backups with safe restore"></a><br><b>Savegames</b> — Versioned backups with safe restore</td>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/06-achievements.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/06-achievements.jpg" alt="Achievements: 40 unlocks with progress and toasts"></a><br><b>Achievements</b> — 40 unlocks with progress and toasts</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/05-savegames.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/05-savegames.jpg" alt="Savegames: versioned backups with safe restore"></a><br><b>Savegames</b>: Versioned backups with safe restore</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/06-achievements.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/06-achievements.jpg" alt="Achievements: 40 unlocks with progress and toasts"></a><br><b>Achievements</b>: 40 unlocks with progress and toasts</td>
   </tr>
   <tr>
-    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/07-stats.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/07-stats.jpg" alt="Stats: hours, sessions and Entertainment Yield"></a><br><b>Stats</b> — Hours, sessions and Entertainment Yield</td>
+    <td><a href="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/07-stats.jpg"><img src="https://raw.githubusercontent.com/Shady-Unknown/AeThiccLauncher/main/docs/screenshots/07-stats.jpg" alt="Stats: hours, sessions and Entertainment Yield"></a><br><b>Stats</b>: Hours, sessions and Entertainment Yield</td>
     <td></td>
   </tr>
 </table>
@@ -213,4 +213,6 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ## Changelog
 
-Every release — with the full list of changes, notes and downloads — lives in **[CHANGELOG.md](CHANGELOG.md)** and on the **[GitHub Releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases)**.
+**v1.9.6 (2026-11-24):** faster trailer downloads (parallel HLS segments, 1080p by default, 1 GB cache), colour emoji on Linux, quicker Discovery covers, and scrollbar clicks that jump to the clicked position.
+
+Every release (with the full list of changes, notes and downloads) lives in **[CHANGELOG.md](CHANGELOG.md)** and on the **[GitHub Releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases)**.

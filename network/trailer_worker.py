@@ -167,6 +167,8 @@ class TrailerWorker(QThread):
                 entry = data.get(appid) or data.get(str(appid))
                 if entry and entry.get("success"):
                     trailer = TrailerWorker._extract_trailer(entry.get("data"))
+                    if trailer:
+                        trailer["appid"] = str(appid)
                     if trailer and trailer.get("hls"):
                         variants = self._fetch_variants(trailer["hls"])
                         if variants:

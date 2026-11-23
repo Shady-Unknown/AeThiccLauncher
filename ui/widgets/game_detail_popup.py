@@ -30,8 +30,11 @@ from core.paths import PathManager
 from managers.igdb_details_cache import IgdbDetailsCache
 from managers.playtime_manager import PlaytimeManager
 from managers.save_manager import safe_game_folder_name
+from managers.trailer_manager import TrailerManager
 from network.igdb_details_worker import IGDBDetailsWorker
-from network.trailer_downloader import TrailerDownloadWorker, cached_path
+from network.trailer_downloader import (
+    DEFAULT_VARIANT, TrailerDownloadWorker, cached_path,
+)
 from network.trailer_worker import TrailerWorker
 from ui.widgets.discovery_card import VideoSurface
 
@@ -102,6 +105,9 @@ class GameDetailPopup(QWidget):
         self._streaming = False
         self._selected_url = None
         self._selected_label = "Auto"
+        self._download_label = DEFAULT_VARIANT
+        self._download_pct = 0
+        self._trailer_retried = False
         self._falling_back = False
         self._player = None
         self._audio = None
@@ -462,6 +468,9 @@ class GameDetailPopup(QWidget):
         self._play_when_ready = False
         self._selected_url = None
         self._selected_label = "Auto"
+        self._download_label = DEFAULT_VARIANT
+        self._download_pct = 0
+        self._trailer_retried = False
         self._extract_retries = 0
         self._extract_pending = False
 
@@ -777,14 +786,21 @@ class GameDetailPopup(QWidget):
         if self._trailer:
             self._start_trailer_download(gen)
 
-    def _trailer_key(self):
+    def _trailer_appid(self):
+        if isinstance(self._trailer, dict):
+            appid = str(self._trailer.get("appid") or "").strip()
+            if appid:
+                return appid
         igdb = self._igdb()
         appid = (igdb.get("steam_appid")
                  or self._entry.get("steam_id")
                  or (self._entry.get("sgdb_assets") or {}).get("steam_app_id")
                  or (self._entry.get("version_status") or {}).get("app_id")
                  or "")
-        return str(appid) if str(appid).strip() else self._title
+        return str(appid).strip()
+
+    def _trailer_key(self):
+        return self._trailer_appid() or self._title
 
     def _show_trailer_progress(self, value=None):
         bar = getattr(self, "_trailer_progress", None)
@@ -803,7 +819,8 @@ class GameDetailPopup(QWidget):
             bar.hide()
 
     def _start_trailer_download(self, gen):
-        key = self._trailer_key()
+        label = self._download_label or DEFAULT_VARIANT
+        key = f"{self._trailer_key()}-{label}"
         existing = cached_path(key)
         if existing and os.path.isfile(existing):
             self._local_trailer = existing
@@ -812,29 +829,44 @@ class GameDetailPopup(QWidget):
         # No cached file for THIS title: make sure the previous title's local
         # MP4 cannot be selected by _trailer_url() while we download.
         self._local_trailer = ""
+        self._download_pct = 0
         if not isinstance(self._trailer, dict):
             return
         url = str(self._trailer.get("hls") or "")
         if not url:
             return
-        worker = TrailerDownloadWorker(url, key, duration_ms=0, parent=self)
-        worker.progress.connect(lambda pct, g=gen: self._on_download_progress(g, pct))
-        worker.ready.connect(lambda path, g=gen: self._on_download_ready(g, path))
-        worker.failed.connect(lambda msg, g=gen: self._on_download_failed(g, msg))
+        worker = TrailerDownloadWorker(
+            url, key, duration_ms=0, variant_label=label, parent=self)
+        worker.progress.connect(
+            lambda pct, g=gen, w=worker: self._on_download_progress(g, pct, w))
+        worker.ready.connect(
+            lambda path, g=gen, w=worker: self._on_download_ready(g, path, w))
+        worker.failed.connect(
+            lambda msg, g=gen, w=worker: self._on_download_failed(g, msg, w))
+        worker.expired.connect(
+            lambda g=gen, w=worker: self._on_download_expired(g, w))
         self._download_worker = worker
         worker.start()
-        self._show_trailer_progress()
+        # The progress bar stays hidden until the user presses Play.
 
-    def _on_download_progress(self, gen, pct):
-        if gen != self._gen:
+    def _on_download_progress(self, gen, pct, worker=None):
+        if gen != self._gen or (worker is not None and worker is not self._download_worker):
             return
-        self._show_trailer_progress(pct)
-        self._status_label.setText(f"Preparing trailer… {pct}%")
+        self._download_pct = pct
+        bar = getattr(self, "_trailer_progress", None)
+        if bar is not None and bar.isVisible():
+            self._show_trailer_progress(pct)
+            self._status_label.setText(f"Downloading trailer… {pct}%")
 
-    def _on_download_ready(self, gen, path):
-        if gen != self._gen:
+    def _on_download_ready(self, gen, path, worker=None):
+        if gen != self._gen or (worker is not None and worker is not self._download_worker):
             return
+        self._download_worker = None
         self._local_trailer = path
+        try:
+            os.utime(path, None)   # LRU: remember the last playback
+        except OSError:
+            pass
         self._hide_trailer_progress()
         self._status_label.setText("")
         was_playing = (self._player is not None and not _deleted(self._player)
@@ -853,8 +885,8 @@ class GameDetailPopup(QWidget):
             self._play_when_ready = False
             self._play_trailer()
 
-    def _on_download_failed(self, gen, msg):
-        if gen != self._gen:
+    def _on_download_failed(self, gen, msg, worker=None):
+        if gen != self._gen or (worker is not None and worker is not self._download_worker):
             return
         print(f"[GameDetail] trailer download failed: {msg}")
         self._hide_trailer_progress()
@@ -864,9 +896,33 @@ class GameDetailPopup(QWidget):
         self._status_label.setText("")
         if self._play_when_ready:
             self._play_when_ready = False
-            self._play_trailer()
+            # Stream the HLS instead of retrying the download: _play_trailer
+            # would start another download and loop on persistent failures.
+            self._play_trailer(allow_download=False)
         else:
             self._status_label.setText("Trailer preparation failed")
+
+    def _on_download_expired(self, gen, worker=None):
+        """The cached appdetails HLS URL returned 403/404: refresh it once."""
+        if gen != self._gen or (worker is not None and worker is not self._download_worker):
+            return
+        self._download_worker = None
+        self._hide_trailer_progress()
+        print("[GameDetail] trailer URL expired, refreshing appdetails")
+        if not self._trailer_retried:
+            self._trailer_retried = True
+            appid = self._trailer_appid()
+            if appid:
+                TrailerManager.remove(appid)
+            self._local_trailer = ""
+            self._load_trailer(gen)
+            return
+        # Still expired (the API itself serves a dead URL): fall back to
+        # YouTube/search instead of leaving a broken Play button.
+        self._play_when_ready = False
+        self._trailer = None
+        self._status_label.setText("")
+        self._refresh_trailer_mode()
 
     def _load_cover(self, gen):
         if getattr(self, "_big_cover_done", False):
@@ -1046,7 +1102,7 @@ class GameDetailPopup(QWidget):
                 return
         self._play_trailer()
 
-    def _play_trailer(self):
+    def _play_trailer(self, allow_download=True):
         if not self._trailer:
             return
         if self._local_trailer and not os.path.isfile(self._local_trailer):
@@ -1059,9 +1115,24 @@ class GameDetailPopup(QWidget):
             if worker is not None and worker.isRunning():
                 # Download in progress: wait for the local file (seek works).
                 self._play_when_ready = True
-                self._show_trailer_progress()
-                self._status_label.setText("Preparing trailer…")
+                pct = self._download_pct or 0
+                self._show_trailer_progress(pct)
+                self._status_label.setText(f"Downloading trailer… {pct}%")
                 return
+            if allow_download and isinstance(self._trailer, dict) and self._trailer.get("hls"):
+                # No local file and no active download: start one and wait.
+                self._play_when_ready = True
+                self._download_pct = 0
+                self._start_trailer_download(self._gen)
+                if not self._local_trailer:
+                    self._show_trailer_progress(0)
+                    self._status_label.setText("Downloading trailer… 0%")
+                    return
+        else:
+            try:
+                os.utime(self._local_trailer, None)   # LRU: last playback
+            except OSError:
+                pass
         player = self._ensure_player()
         if player.source().toString() != url:
             player.stop()
@@ -1300,6 +1371,19 @@ class GameDetailPopup(QWidget):
     def _select_resolution(self, url, label):
         self._selected_url = url
         self._selected_label = label
+        new_label = DEFAULT_VARIANT if label == "Auto" else label
+        if new_label != self._download_label:
+            self._download_label = new_label
+            worker = self._download_worker
+            if (not self._local_trailer
+                    and worker is not None and worker.isRunning()):
+                # Honor an explicit quality change while the trailer is still
+                # downloading: restart the download at the selected variant.
+                self._stop_download()
+                self._local_trailer = ""
+                self._start_trailer_download(self._gen)
+                if self._play_when_ready:
+                    self._show_trailer_progress(self._download_pct or 0)
         if self._video is not None and not _deleted(self._video):
             self._video.set_resolution_label(label)
         if self._player is not None and not _deleted(self._player):
