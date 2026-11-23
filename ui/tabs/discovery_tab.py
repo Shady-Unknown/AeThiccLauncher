@@ -1432,6 +1432,23 @@ class DiscoveryTab(QWidget):
             return
         # Niente reset di _cover_loaded: ri-enqueued copriva le stesse cover
         # a ogni batch di metadati (download + decode ripetuti).
+        discovery = self._discovery()
+        if discovery is None:
+            return
+        # The cover jobs usually run before the per-title IGDB metadata is
+        # fetched, so they fall back to the slow (throttled) SGDB name lookup.
+        # Now that the cover URL is known, retry only the cards still missing.
+        titles = []
+        for title, meta in results.items():
+            if not isinstance(meta, dict) or not meta.get("cover_url"):
+                continue
+            card = discovery._find_card(title)
+            if card is None or card.get("cover_path"):
+                continue
+            titles.append(title)
+        if titles:
+            discovery.cancel_covers(titles)
+            discovery.enqueue_covers(titles, high=True)
 
     def _mark_all_rows_dirty(self):
         self._dirty_keys = set(self._category_keys)
@@ -1811,6 +1828,18 @@ class DiscoveryTab(QWidget):
                 discovery.cancel_covers(sorted(titles))
         self._cover_active_keys = active
 
+        # Arricchimento IGDB della riga in focus (una volta per riga/sessione).
+        # Start it before the covers: their jobs use the IGDB cover URL when
+        # it is available and fall back to the throttled SGDB lookup anyway.
+        focus_key = getattr(focus_row, '_category_key', None)
+        if focus_key and focus_key not in self._meta_requested_keys:
+            self._meta_requested_keys.add(focus_key)
+            meta_titles = [c._title for c in
+                           focus_row.original_cards()[:COVER_WINDOW_CARDS + 15]
+                           if c._title]
+            if meta_titles:
+                discovery.enqueue_igdb_meta(meta_titles)
+
         for row in window:
             is_focus = row is focus_row
             target = self._cover_target_count(row)
@@ -1831,16 +1860,6 @@ class DiscoveryTab(QWidget):
                     discovery.enqueue_cards(
                         window_cards, high=is_focus, allow_scrape=allow,
                         allow_page_fetch=is_focus)
-
-        # Arricchimento IGDB della riga in focus (una volta per riga/sessione).
-        focus_key = getattr(focus_row, '_category_key', None)
-        if focus_key and focus_key not in self._meta_requested_keys:
-            self._meta_requested_keys.add(focus_key)
-            titles = [c._title for c in
-                      focus_row.original_cards()[:COVER_WINDOW_CARDS + 15]
-                      if c._title]
-            if titles:
-                discovery.enqueue_igdb_meta(titles)
 
     # ── trailer previews ─────────────────────────────────────────────
 

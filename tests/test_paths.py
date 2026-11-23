@@ -61,7 +61,8 @@ class DataRootTests(unittest.TestCase):
         self.assertEqual(written, self.app_dir / paths.BOOTSTRAP_FILENAME)
         payload = json.loads(written.read_text(encoding="utf-8"))
         self.assertEqual(Path(payload["data_root"]), target.resolve())
-        for name in ("Cache", "local_dbs", "config", "stats", "state", "logs"):
+        cache_name = "Cache" if sys.platform == "win32" else "downloads"
+        for name in (cache_name, "local_dbs", "config", "stats", "state", "logs"):
             self.assertTrue((target / name).is_dir(), name)
 
     @unittest.skipIf(sys.platform == "win32", "Linux/XDG cache layout")

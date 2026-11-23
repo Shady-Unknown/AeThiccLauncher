@@ -126,7 +126,6 @@ class NativeFreshnessTests(unittest.TestCase):
 
 class CategoryRowOrderTests(unittest.TestCase):
     """A page appended while cards are still pending must not jump the queue."""
-
     def _row_class(self):
         from ui.tabs.discovery_tab import CategoryRow
         return CategoryRow
@@ -220,6 +219,31 @@ class RecentlyUpdatedRowTests(unittest.TestCase):
         manager = DiscoveryManager(None)
         manager._data = {"recent_updates": _entry(next_page=2)}
         self.assertFalse(manager.request_more("recent_updates"))
+
+
+class CoverJobSourcesTests(unittest.TestCase):
+    """Cover jobs use the fast sources before the throttled SGDB fallbacks."""
+
+    def test_card_page_url_is_used_without_a_catalog_entry(self):
+        manager = DiscoveryManager(None)
+        job = manager._job_for_card(
+            {"title": "Brand New", "url": "https://steamrip.com/brand-new"})
+        self.assertEqual(job["url"], "https://steamrip.com/brand-new")
+
+    def test_card_igdb_meta_cover_is_used(self):
+        manager = DiscoveryManager(None)
+        job = manager._job_for_card(
+            {"title": "New",
+             "igdb_meta": {"cover_url": "https://images.igdb.com/x.jpg"}})
+        self.assertEqual(job["igdb_cover_url"],
+                         "https://images.igdb.com/x.jpg")
+
+    def test_protocol_relative_igdb_cover_is_normalised(self):
+        manager = DiscoveryManager(None)
+        job = manager._job_for_card(
+            {"title": "New", "igdb": {"cover_url": "//images.igdb.com/x.jpg"}})
+        self.assertEqual(job["igdb_cover_url"],
+                         "https://images.igdb.com/x.jpg")
 
 
 if __name__ == "__main__":

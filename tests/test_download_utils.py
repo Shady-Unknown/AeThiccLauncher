@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import unittest
 
@@ -12,6 +13,7 @@ from core.download_utils import (
 
 
 class DownloadUtilsTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "normcase only folds on Windows")
     def test_normalize_dest_path_is_case_insensitive_on_windows(self):
         first = normalize_dest_path(r"C:\Cache\Game.RAR")
         second = normalize_dest_path(r"c:\cache\game.rar")

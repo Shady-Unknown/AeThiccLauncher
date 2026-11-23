@@ -1,0 +1,10 @@
+Twemoji Mozilla (Twemoji.Mozilla.ttf)
+=====================================
+
+Emoji graphics: Twemoji — Copyright 2019 Twitter, Inc and other contributors.
+Graphics licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+COLR/CPAL font conversion: mozilla/twemoji-colr
+https://github.com/mozilla/twemoji-colr
+
+The licence text is in Twemoji-LICENSE.txt (Attribution 4.0 International).

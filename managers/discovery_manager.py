@@ -1431,7 +1431,10 @@ class DiscoveryManager(QObject):
             if catalog is not None and title:
                 entry = catalog.get_entry(title) or {}
         igdb = card.get("igdb") or {}
-        igdb_meta = entry.get("igdb_meta") if isinstance(entry, dict) else {}
+        # ``_on_meta_ready`` stores the per-title IGDB payload on the card;
+        # use it before the (possibly not yet debounced) catalog entry.
+        igdb_meta = card.get("igdb_meta") or (
+            entry.get("igdb_meta") if isinstance(entry, dict) else {})
         cover_url = ((igdb or {}).get("cover_url")
                      or (igdb_meta or {}).get("cover_url"))
         if cover_url and str(cover_url).startswith("//"):
@@ -1441,7 +1444,11 @@ class DiscoveryManager(QObject):
             "catalog_entry": entry,
             "igdb": igdb,
             "igdb_cover_url": cover_url,
-            "url": entry.get("url") or "",
+            # A fresh discovery card always carries the SteamRip page URL even
+            # when the title is not in the catalog yet: the fast HTTP featured
+            # image fetch can use it instead of the throttled SGDB name lookup.
+            "url": ((entry.get("url") if isinstance(entry, dict) else "")
+                    or card.get("url") or ""),
             "allow_scrape": allow_scrape,
             "allow_page_fetch": allow_page_fetch,
         }

@@ -173,6 +173,15 @@ if __name__ == "__main__":
     if sys.platform == "linux" and _on_fuse_fs(get_base_dir()):
         os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
+    if sys.platform.startswith("linux"):
+        # Qt 6.11 cannot rasterize the COLRv1 "Noto Color Emoji" font and
+        # prefers it over the bundled monochrome emoji font, leaving the UI
+        # icons blank. Point fontconfig at the shipped config that rejects it.
+        fontconfig_conf = os.path.join(
+            get_base_dir(), ".media", "fonts", "fonts.conf")
+        if os.path.isfile(fontconfig_conf):
+            os.environ.setdefault("FONTCONFIG_FILE", fontconfig_conf)
+
     app = QApplication(sys.argv)
     app.setApplicationName("AeThiccLauncher")
     if sys.platform.startswith("linux"):
@@ -190,6 +199,18 @@ if __name__ == "__main__":
             print(f"[Fonts] Could not load the emoji font: {emoji_font}")
     else:
         print(f"[Fonts] Emoji font missing: {emoji_font}")
+    if sys.platform.startswith("linux"):
+        # COLRv1 colour emoji (the Noto Color Emoji packaged by Fedora/Nobara)
+        # is not rasterised by Qt 6.11, so ship a COLRv0 colour font it can
+        # draw. Qt prefers it over the monochrome fallback automatically.
+        colour_font = os.path.join(
+            get_base_dir(), ".media", "fonts", "Twemoji.Mozilla.ttf")
+        if os.path.exists(colour_font):
+            font_id = QFontDatabase.addApplicationFont(colour_font)
+            if font_id < 0:
+                print(f"[Fonts] Could not load the colour emoji font: {colour_font}")
+        else:
+            print(f"[Fonts] Colour emoji font missing: {colour_font}")
     _phase("fonts loaded")
 
     # Usiamo get_base_dir() per avere un percorso affidabile sia da script che da exe compilato

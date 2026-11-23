@@ -186,13 +186,20 @@ def save_config(config_data):
 
 def get_stylesheet(theme_data):
     main_bg = theme_data.get('main_background_color', theme_data.get('background_dark_purple', '#1a0f2b'))
+    # Linux/Flatpak ships the COLRv0 Twemoji font (the system Noto Color Emoji
+    # is COLRv1 and Qt 6.11 cannot rasterise it); the monochrome Noto Emoji
+    # stays as the last-resort fallback. Windows keeps the native colour emoji.
+    if sys.platform.startswith("linux"):
+        emoji_families = "'Twemoji Mozilla', 'Noto Emoji'"
+    else:
+        emoji_families = "'Noto Emoji'"
     return f"""
         QMainWindow, QDialog {{ 
             background-color: {main_bg}; 
         }}
         QWidget {{ 
             color: {theme_data.get('text_primary_white', '#ffffff')}; 
-            font-family: 'Segoe UI', 'Inter', 'Noto Sans', 'DejaVu Sans', 'Noto Emoji', Arial; 
+            font-family: 'Segoe UI', 'Inter', 'Noto Sans', 'DejaVu Sans', {emoji_families}, Arial;
         }}
         
         QScrollArea, QListWidget, QTreeWidget {{
