@@ -1,8 +1,10 @@
 import os
+import re
 import sys
+from urllib.parse import quote
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QStringListModel, QTimer
-from PyQt6.QtGui import QColor, QCursor, QIcon, QPainter, QPalette
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QStringListModel, QTimer, QUrl
+from PyQt6.QtGui import QColor, QCursor, QDesktopServices, QIcon, QPainter, QPalette
 from PyQt6.QtWidgets import (QCompleter, QFrame, QGraphicsDropShadowEffect,
                              QHBoxLayout, QLabel, QLineEdit, QListWidget,
                              QProgressBar, QPushButton, QScrollArea,
@@ -28,6 +30,24 @@ COVER_H = 382
 LIGHT_THRESHOLD = 0.60
 DESC_MIN_HEIGHT = 140
 DESC_MAX_HEIGHT = 520
+
+
+def metacritic_search_url(title):
+    """Metacritic search URL for a game title (no guessed slug)."""
+    clean = re.sub(r"[^\w\s]", " ", str(title or ""), flags=re.UNICODE)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return "https://www.metacritic.com/search/" + quote(clean) + "/"
+
+
+def format_igdb_rating(value):
+    """IGDB ratings are 0-100; the pill shows them on a 0-10 scale."""
+    try:
+        rating = float(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if rating <= 0:
+        return ""
+    return f"{rating / 10.0:.1f} / 10"
 
 
 class ExplorerTab(QWidget):
@@ -127,6 +147,7 @@ class ExplorerTab(QWidget):
             self.sidebar_widget: 0.40,
             self.center_panel: 0.16,
             self.desc_panel: 0.34,
+            self.status_strip: 0.34,
             self.req_panel: 0.36,
             self.info_panel: 0.36,
             self.links_panel: 0.36,
@@ -383,9 +404,113 @@ class ExplorerTab(QWidget):
         disable_scrollbar_menu(self.desc_display)
         desc_layout.addWidget(self.desc_display)
         self.text_header_layout.addWidget(self.desc_panel, 0)
+
+        # --- status strip: library indicators + IGDB rating / reviews ---
+        self.status_strip = GlassPanel(theme, radius=12, alpha=0.34)
+        self.status_strip.setObjectName("StatusStrip")
+        strip_layout = QHBoxLayout(self.status_strip)
+        strip_layout.setContentsMargins(12, 6, 12, 6)
+        strip_layout.setSpacing(14)
+
+        self._status_caption = QLabel("STATUS")
+        strip_layout.addWidget(self._status_caption)
+
+        self._status_labels = {}
+        for key, text in (("update", "Update"), ("json", "JSON"),
+                          ("save", "Saves"), ("steam", "Steam")):
+            label = QLabel("")
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setToolTip("")
+            strip_layout.addWidget(label)
+            self._status_labels[key] = label
+
+        strip_layout.addStretch(1)
+        self.btn_reviews = QPushButton("Read Reviews")
+        self.btn_reviews.setObjectName("ReviewsPill")
+        self.btn_reviews.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reviews.setToolTip("Open reviews on Metacritic")
+        self.btn_reviews.clicked.connect(self._open_reviews)
+        strip_layout.addWidget(self.btn_reviews, 0)
+
+        self._reviews_url = ""
+        self._reviews_title = ""
+        self._apply_status_theme(theme)
+        self.status_strip.hide()
+        self.text_header_layout.addWidget(self.status_strip, 0)
+
         self.text_header_layout.addStretch(1)
 
         self.upper_layout.addLayout(self.text_header_layout)
+
+    # ── status strip ─────────────────────────────────────────────────
+
+    def _apply_status_theme(self, theme):
+        accent = theme.get('bright_neon_accent', '#ff00a0')
+        border = theme.get('main_accent_color', '#733d91')
+        text = theme.get('text_primary_white', '#ffffff')
+        muted = theme.get('text_muted', '#8a7fa4')
+        self._status_caption.setStyleSheet(
+            "font-size: 10px; font-weight: bold; letter-spacing: 1px;"
+            f" color: {muted}; background: transparent; border: none;"
+        )
+        for label in self._status_labels.values():
+            label.setStyleSheet(
+                "font-size: 11px; background: transparent; border: none;"
+                f" color: {text};"
+            )
+        self.btn_reviews.setStyleSheet(
+            "QPushButton#ReviewsPill { background: rgba(255,255,255,0.08);"
+            f" color: {text}; border: 1px solid {border}; border-radius: 12px;"
+            " padding: 4px 12px; font-size: 11px; font-weight: bold; }"
+            "QPushButton#ReviewsPill:hover { background: rgba(255,255,255,0.16);"
+            f" border-color: {accent}; }}"
+            "QPushButton#ReviewsPill:pressed { background: rgba(255,255,255,0.22); }"
+        )
+
+    def set_game_status(self, indicators, installed=True):
+        """Show the four library indicators (installed) or only the reviews pill."""
+        indicators = indicators or {}
+        if installed and indicators:
+            self._status_caption.show()
+            for key, text in (("update", "Update"), ("json", "JSON"),
+                              ("save", "Saves"), ("steam", "Steam")):
+                dot, color, tooltip = indicators.get(
+                    key, ("●", "#8a7fa4", ""))
+                label = self._status_labels[key]
+                label.setText(
+                    f"<span style='color:{color}; font-size:13px;'>{dot}</span>"
+                    f" {text}"
+                )
+                label.setToolTip(str(tooltip or ""))
+                label.show()
+        else:
+            self._status_caption.hide()
+            for label in self._status_labels.values():
+                label.clear()
+                label.hide()
+        self.status_strip.show()
+
+    def set_reviews(self, rating, title):
+        self._reviews_title = str(title or "")
+        self._reviews_url = metacritic_search_url(self._reviews_title)
+        score = format_igdb_rating(rating)
+        self.btn_reviews.setText(
+            f"IGDB {score} · Read Reviews" if score else "Read Reviews")
+        self.status_strip.show()
+
+    def clear_game_status(self):
+        self._reviews_url = ""
+        self._reviews_title = ""
+        self.btn_reviews.setText("Read Reviews")
+        self._status_caption.hide()
+        for label in self._status_labels.values():
+            label.clear()
+            label.hide()
+        self.status_strip.hide()
+
+    def _open_reviews(self):
+        if self._reviews_url:
+            QDesktopServices.openUrl(QUrl(self._reviews_url))
 
     def _show_description_menu(self, pos):
         """Menu contestuale della descrizione (copia/seleziona) in stile vetro."""
@@ -748,6 +873,7 @@ class ExplorerTab(QWidget):
         return [
             self.sidebar_widget,
             self.desc_panel,
+            self.status_strip,
             self.req_panel,
             self.info_panel,
             self.links_panel,
@@ -762,6 +888,7 @@ class ExplorerTab(QWidget):
         for view in (self.req_display, self.info_display):
             view.set_theme(self._theme)
         self.bg_layer.set_theme(self._theme)
+        self._apply_status_theme(self._theme)
         self._apply_list_style(theme_accent(self._theme))
         self._apply_search_contrast()
 

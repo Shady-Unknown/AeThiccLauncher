@@ -114,5 +114,10 @@ class BackgroundScanner(QObject):
                 pass 
 
             self.parent.lib_manager._update_library_item(item, title_prefix, sub_text, title_color=None, sub_color=sub_color, meta=meta, game_title=game_title)
+            if getattr(self.parent, "current_game_data", {}).get("title") == game_title:
+                try:
+                    self.parent._update_explorer_status(game_title)
+                except Exception:
+                    pass
 
         QTimer.singleShot(200, self._process_next_bg_check)

@@ -79,6 +79,12 @@ class BadgesView(QWidget):
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll, 1)
 
+        self.footer_label = QLabel("")
+        self.footer_label.setObjectName("AchievementsFooter")
+        self.footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.footer_label.setWordWrap(True)
+        layout.addWidget(self.footer_label)
+
     def _set_filter(self, key):
         self._filter = key
         self.refresh()
@@ -141,6 +147,12 @@ class BadgesView(QWidget):
         muted = theme.get("text_muted") or "#8a7fa4"
         border = theme.get("main_accent_color") or "#733d91"
         accent = theme.get("bright_neon_accent") or "#ff00a0"
+        self.footer_label.setText(
+            "If you like the game and the software house / publisher aren't "
+            "aggressive monetizers, if they are pro-users, if they support the "
+            f"customer, <b style='color:{accent}; text-transform: uppercase;'>"
+            "BUY THE GAME. THEY DESERVE IT.</b>"
+        )
         self.setStyleSheet(f"""
             QWidget#AchievementsRoot, QWidget#BadgesContent {{
                 background: transparent;
@@ -158,6 +170,14 @@ class BadgesView(QWidget):
             QLabel#AchievementsCount {{
                 color: {muted};
                 font-size: 11px;
+            }}
+            QLabel#AchievementsFooter {{
+                color: {muted};
+                font-size: 11px;
+                padding: 4px 10px;
+                background: rgba(0,0,0,0.1);
+                border-radius: 4px;
+                margin-top: 5px;
             }}
             QPushButton#StatsMode {{
                 background: transparent;

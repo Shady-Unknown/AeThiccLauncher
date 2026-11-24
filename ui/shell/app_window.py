@@ -109,6 +109,9 @@ from ui.controllers.session import SessionController
 from ui.controllers.settings import SettingsController
 
 
+from core.version import __version__
+
+
 class AppWindow(
     QMainWindow,
     BaseController,
@@ -122,7 +125,7 @@ class AppWindow(
 ):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ae Thicc Launcher")
+        self.setWindowTitle(f"Ae Thicc Launcher {__version__}")
         self.resize(1100, 750)
         self.setWindowFlags(Qt.WindowType.Window)
 

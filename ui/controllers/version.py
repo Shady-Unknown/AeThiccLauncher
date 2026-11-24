@@ -336,6 +336,10 @@ class VersionController:
                 and not self._steam_build_queue):
             QTimer.singleShot(1200, lambda t=title, a=app_id: self._start_steam_build_worker(t, a, silent=True))
 
+        current = str((getattr(self, "current_game_data", None) or {}).get("title") or "")
+        if hasattr(self, "_update_explorer_status") and title == current:
+            self._update_explorer_status(title)
+
     def toggle_version_status_panel(self):
         panel = getattr(self, 'version_status_panel', None)
         pill = getattr(self, 'btn_version_status', None)

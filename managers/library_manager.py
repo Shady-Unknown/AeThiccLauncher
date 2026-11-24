@@ -147,120 +147,45 @@ class LibraryManager:
         return score
 
     def _update_library_item(self, item, title_text, sub_text, title_color=None, sub_color="#a0a0a0", meta=None, game_title=None):
-        """Costruisce o aggiorna un Custom Widget HTML per le righe della libreria con i pallini indicatori allineati alle colonne."""
+        """Title-only library row; the four status dots live in the Explorer."""
         if not title_color:
             title_color = self.app_config['theme']['text_primary_white']
-            
+
         widget = self.lib_list.itemWidget(item)
         if not widget:
             widget = QWidget()
             widget.setStyleSheet("background: transparent;")
             main_layout = QHBoxLayout(widget)
-            # Margini bilanciati
-            main_layout.setContentsMargins(8, 6, 8, 5) 
+            main_layout.setContentsMargins(8, 4, 8, 4)
             main_layout.setSpacing(0)
-            
-            # Colonna 1: Titolo e sottotesto (expandable)
-            left_layout = QVBoxLayout()
-            left_layout.setSpacing(2)
-            left_layout.setContentsMargins(0, 0, 0, 0)
-            
+
             lbl_title = ElidedLabel()
             lbl_title.setObjectName("ItemTitle")
             lbl_title.setStyleSheet("background: transparent; padding-bottom: 1px;")
             lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-            lbl_sub = QLabel()
-            lbl_sub.setObjectName("ItemSub")
-            lbl_sub.setStyleSheet("background: transparent;")
-            lbl_sub.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-
-            left_layout.addWidget(lbl_title)
-            left_layout.addWidget(lbl_sub)
-            main_layout.addLayout(left_layout, 1)  # Expandable
-            
-            # Spacing tra nome e pallini
-            main_layout.addSpacing(4)
-            
-            # Colonne compatte per i 4 pallini (più spazio ai titoli)
-            for i in range(4):
-                dot_lbl = QLabel()
-                dot_lbl.setObjectName(f"Indicator{i}")
-                dot_lbl.setFixedWidth(18)
-                dot_lbl.setMinimumHeight(28)
-                dot_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-                dot_lbl.setStyleSheet("background: transparent; font-size: 13px;")
-                main_layout.addWidget(dot_lbl)
-                if i < 3:  # Spacing tra pallini (non dopo l'ultimo)
-                    main_layout.addSpacing(1)
-            
+            main_layout.addWidget(lbl_title, 1)
             self.lib_list.setItemWidget(item, widget)
-            
+
         lbl_title = widget.findChild(QLabel, "ItemTitle")
-        lbl_sub = widget.findChild(QLabel, "ItemSub")
-        
-        # --- LOGICA INTELLIGENTE DI PERSISTENZA WARNING ---
+
+        # The full status (update/json/saves/steam) moved to the Explorer strip.
+        # The row keeps the title and the at-a-glance prefixes only.
         if meta is not None and game_title is not None:
             indicators = self._get_status_indicators(game_title, meta)
-            
-            # Calcoliamo i problemi (Issues) per popolare il sottotitolo se è vuoto o generico
-            issues = []
-            if meta.get('is_orphan'):
-                issues.append("JSON")
-            else:
-                if not (meta.get('savegame_path_win') or meta.get('savegame_path_linux') or meta.get('savegame_path_custom')):
-                    issues.append("SAVES")
-                steam_id = meta.get('steam_shortcut_id')
-                if not steam_id or not str(steam_id).strip():
-                    issues.append("STEAM")
+            update_available = "Update available" in indicators['update'][2]
+            if update_available:
+                title_text = f"❗ {game_title}"
+            elif meta.get('is_orphan'):
+                title_text = f"❓ {game_title}"
 
-            # Controllo Update disponibile dal dizionario degli indicatori appena calcolato
-            dot_upd, color_upd, tip_upd = indicators['update']
-            update_available = "Update available" in tip_upd
-
-            # Se il sottotitolo passato è vuoto (es. da scan_library), o è un warning stantio
-            # (es. "(Missing: SAVES - STEAM)" prodotto dallo scanner con una meta vecchia),
-            # ricalcoliamo TUTTO dalla meta corrente così la riga si auto-corregge.
-            if not sub_text or sub_text == "Installed" or sub_text.startswith("(Missing:"):
-                if update_available:
-                    title_text = f"❗ {game_title}"
-                    sub_text = "(Update Available!)"
-                    sub_color = self.app_config['theme']['status_green']
-                elif issues:
-                    if meta.get('is_orphan'):
-                        title_text = f"❓ {game_title}"
-                    sub_text = f"(Missing: {' - '.join(issues)})"
-                    sub_color = self.app_config['theme']['status_yellow']
-                elif is_local_install(meta):
-                    # Installazione locale (non SteamRip): badge dedicato invece di "Installed"
-                    title_text = game_title
-                    sub_text = "Local Game"
-                    sub_color = self.app_config['theme']['text_secondary_pink']
-                else:
-                    title_text = game_title # Reset del prefisso se tutto è risolto
-                    sub_text = "Installed"
-                    sub_color = "#a0a0a0"
-
-            # Aggiorna i pallini indicatori
-            indicator_keys = ['update', 'json', 'save', 'steam']
-            for idx, key in enumerate(indicator_keys):
-                if key in indicators:
-                    dot, color, tooltip = indicators[key]
-                    dot_lbl = widget.findChild(QLabel, f"Indicator{idx}")
-                    if dot_lbl:
-                        dot_lbl.setText(f"<span style='color:{color}; font-size:13px;'>{dot}</span>")
-                        dot_lbl.setToolTip(tooltip)
-        
-        # Applicazione finale dei testi (titolo con ellissi + tooltip, sottotitolo)
         if hasattr(lbl_title, "set_full_text"):
             lbl_title.set_style(title_color, 12, True)
             lbl_title.set_full_text(title_text)
         else:  # fallback difensivo
             lbl_title.setText(f"<span style='color:{title_color}; font-weight:bold; font-size:12px;'>{title_text}</span>")
-        lbl_sub.setText(f"<span style='color:{sub_color}; font-size:10px;'>{sub_text}</span>")
 
         hint = widget.sizeHint()
-        item.setSizeHint(QSize(hint.width(), max(hint.height(), 42)))
+        item.setSizeHint(QSize(hint.width(), max(hint.height(), 30)))
 
     def _get_status_indicators(self, game_title, meta):
         """Ritorna i 4 pallini indicatori (Update, JSON, Save, Steam) per un gioco."""

@@ -301,6 +301,32 @@ class GameDetailController:
         if current and current != title:
             return
         self._apply_age_badges(details.get("age_ratings") or {})
+        self._update_explorer_status(title)
+
+    def _update_explorer_status(self, title, data=None):
+        """Refresh the Explorer status strip (4 indicators + IGDB reviews pill)."""
+        if not hasattr(self, "tab_explorer") or not title:
+            return
+        meta = self.installed_games.get(title)
+        if meta is not None:
+            try:
+                indicators = self.lib_manager._get_status_indicators(title, meta)
+            except Exception:
+                indicators = {}
+            self.tab_explorer.set_game_status(indicators, installed=True)
+        else:
+            self.tab_explorer.set_game_status({}, installed=False)
+
+        details = IgdbDetailsCache.get(title) or {}
+        igdb = {}
+        if isinstance(data, dict):
+            igdb = data.get("igdb_meta") or {}
+        if not igdb:
+            entry = self.master_catalog.get_entry(title) or {}
+            igdb = entry.get("igdb_meta") or {}
+        rating = (igdb.get("rating") or details.get("rating")
+                  or details.get("aggregated_rating") or 0)
+        self.tab_explorer.set_reviews(rating, title)
 
     @staticmethod
     def _first_cover_field(dicts, key):
@@ -727,6 +753,7 @@ class GameDetailController:
 
         self._render_version_status(title, is_installed, is_local, web_version)
         self._update_age_badges(title, data)
+        self._update_explorer_status(title, data)
 
         raw_desc = data['description']
         clean_desc = re.sub(r'<h[234][^>]*>.*?</h[234]>', '<h2>Game Description</h2>', raw_desc, count=1, flags=re.IGNORECASE)
@@ -1246,6 +1273,8 @@ class GameDetailController:
         self.cover_image.page().runJavaScript(js)
 
     def clear_links(self):
+        if hasattr(self, "tab_explorer"):
+            self.tab_explorer.clear_game_status()
         while self.links_container.count():
             child = self.links_container.takeAt(0)
             if child.widget(): child.widget().deleteLater()

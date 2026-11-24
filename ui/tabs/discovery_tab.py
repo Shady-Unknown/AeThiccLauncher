@@ -1055,13 +1055,24 @@ class DiscoveryTab(QWidget):
         self._scroller.row_focus_changed.connect(self._update_cover_window)
         self._scroller.row_focus_changed.connect(self._sync_jump_combo)
         self._scroller.row_focus_changed.connect(self._sync_sort_combo)
-        root_layout.addWidget(self._scroller)
+        root_layout.addWidget(self._scroller, 1)
+
+        self.footer_label = QLabel("")
+        self.footer_label.setObjectName("DiscoveryFooter")
+        self.footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.footer_label.setWordWrap(True)
+        self.footer_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        root_layout.addWidget(self.footer_label, 0)
+
         self._sync_jump_combo()
         self._sync_sort_combo()
         self._rebuild_visible_rows()
 
         self._mask_overlay = MaskOverlay(self)
         self._mask_overlay.raise_()
+        if hasattr(self, 'footer_label'):
+            self.footer_label.raise_()
         if hasattr(self, '_filter_bar_widget'):
             self._filter_bar_widget.raise_()
 
@@ -1918,12 +1929,19 @@ class DiscoveryTab(QWidget):
             top = self._filter_bar_widget.height()
         if hasattr(self, '_notice_bar') and self._notice_bar.isVisible():
             top += self._notice_bar.height()
-        self._mask_overlay.setGeometry(0, top, w, max(0, h - top))
+        # The footer sits below the masked scroller: keep the fade above it so
+        # the ethical disclaimer stays fully readable.
+        footer_top = h
+        if hasattr(self, 'footer_label') and self.footer_label.height() > 0:
+            footer_top = self.footer_label.geometry().top()
+        self._mask_overlay.setGeometry(0, top, w, max(0, footer_top - top))
         self._mask_overlay.raise_()
         if hasattr(self, '_notice_bar'):
             self._notice_bar.raise_()
         if hasattr(self, '_filter_bar_widget'):
             self._filter_bar_widget.raise_()
+        if hasattr(self, 'footer_label'):
+            self.footer_label.raise_()
 
     def _apply_theme(self):
         if not hasattr(self.mw, 'app_config'):
@@ -1933,6 +1951,19 @@ class DiscoveryTab(QWidget):
                         theme.get('background_dark_purple', '#120a1c'))
         self.setStyleSheet(f"background-color: {bg};")
         self._mask_overlay.set_fade_color(bg)
+        muted = theme.get('text_muted', '#8a7fa4')
+        accent = theme.get('bright_neon_accent', '#ff00a0')
+        self.footer_label.setText(
+            "If you like the game and the software house / publisher aren't "
+            "aggressive monetizers, if they are pro-users, if they support the "
+            f"customer, <b style='color:{accent}; text-transform: uppercase;'>"
+            "BUY THE GAME. THEY DESERVE IT.</b>"
+        )
+        self.footer_label.setStyleSheet(
+            f"font-size: 11px; color: {muted}; padding: 4px 10px; "
+            "background-color: rgba(0,0,0,0.1); border-radius: 4px; "
+            "margin-top: 5px;"
+        )
         for row in self._category_rows:
             row.set_theme(theme)
 

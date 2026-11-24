@@ -2,6 +2,14 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
+## Unreleased
+
+### UI
+- The ethical footer ("BUY THE GAME. THEY DESERVE IT.") is now shown on **Discovery** and **Achievements** as well, so every tab carries it.
+- The window title includes the running version.
+- The Explorer sheet shows a glass **status strip** between the description and the three columns: the four library indicators for installed games plus an **IGDB rating pill** (`8.9 / 10`) that opens the Metacritic search page. Games that are not installed show only the reviews pill.
+- The library sidebar lists **titles only**: the four status dots and the subtitle moved to the Explorer strip (the `❗/❓/⏳` prefixes stay).
+
 ## v1.9.6 — 2026-11-24
 
 ### Trailers
