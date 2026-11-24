@@ -213,6 +213,6 @@ In the **Flatpak** build the launcher runs inside a sandbox: seeking works if `f
 
 ## Changelog
 
-**v1.9.6 (2026-11-24):** faster trailer downloads (parallel HLS segments, 1080p by default, 1 GB cache), colour emoji on Linux, quicker Discovery covers, and scrollbar clicks that jump to the clicked position.
+**v1.9.7 (2026-11-24):** the Explorer shows a glass status strip with the library indicators and an IGDB rating pill that opens Metacritic reviews; the library sidebar lists titles only; the ethical footer appears on every tab and the window title shows the version.
 
 Every release (with the full list of changes, notes and downloads) lives in **[CHANGELOG.md](CHANGELOG.md)** and on the **[GitHub Releases page](https://github.com/Shady-Unknown/AeThiccLauncher/releases)**.

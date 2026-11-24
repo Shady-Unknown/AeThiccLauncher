@@ -2,7 +2,7 @@
 
 All notable changes to **Ae Thicc Launcher** are documented here.
 
-## Unreleased
+## v1.9.7 — 2026-11-24
 
 ### UI
 - The ethical footer ("BUY THE GAME. THEY DESERVE IT.") is now shown on **Discovery** and **Achievements** as well, so every tab carries it.
