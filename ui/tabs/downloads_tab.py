@@ -1,12 +1,15 @@
+import logging
 import os
 import time
 import uuid
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QSize, QUrl, QVariantAnimation
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QHBoxLayout, QListWidgetItem, QGraphicsDropShadowEffect, QPushButton, QMenu, QListWidget, QMessageBox
 from PyQt6.QtGui import QColor, QPainter, QLinearGradient, QIcon, QPixmap, QCursor, QDesktopServices
-from core.downloader import SmartDownloaderWorker
+from network.downloader import SmartDownloaderWorker
 from core.archive_utils import clear_incomplete, mark_incomplete
+from core.cache_limits import trim_list
 from core.config import get_base_dir
+from core.task_registry import TaskRegistry
 from core.download_queue_model import (
     KIND_DOWNLOAD,
     KIND_EXTRACT,
@@ -16,6 +19,7 @@ from core.download_queue_model import (
     state_color,
     temp_cleanup_candidates,
 )
+
 from core.download_utils import (
     dedupe_tasks,
     merge_task_data,
@@ -29,6 +33,10 @@ from ui.widgets.queue_items import (
     QueueItemWidget,
     SectionHeaderWidget,
 )
+
+log = logging.getLogger(__name__)
+
+COMPLETED_TASKS_LIMIT = 200
 
 def can_auto_start(active_worker, is_extracting, current_task, is_paused) -> bool:
     """Whether a queued download may start without a user action.
@@ -57,8 +65,9 @@ class DownloadManagerTab(QWidget):
     open_game_page_requested = pyqtSignal(dict)
     attention_changed = pyqtSignal(int)
 
-    def __init__(self, theme_config, parent=None):
+    def __init__(self, theme_config, parent=None, media_profile=None):
         super().__init__(parent)
+        self.media_profile = media_profile
         self.theme = theme_config
         self.neon_start = self.theme.get('neon_gradient_start', '#8d0bb1')
         self.neon_end = self.theme.get('neon_gradient_end', '#00d2ff')
@@ -246,7 +255,7 @@ class DownloadManagerTab(QWidget):
                 removed += 1
                 freed += size
             except OSError as exc:
-                print(f"[DLManager] Could not remove temp file {path}: {exc}")
+                log.exception(f"[DLManager] Could not remove temp file {path}: {exc}")
         self.set_status(
             f"Removed {removed} temp file(s) - {format_bytes(freed)} freed",
             self.status_green,
@@ -331,6 +340,19 @@ class DownloadManagerTab(QWidget):
         self.btn_pause.show()
         self.btn_stop.show()
 
+    def release_webengine(self):
+        """Destroy the cover page before the shared media profile is deleted."""
+        view = getattr(self, "cover_view", None)
+        if view is None:
+            return
+        try:
+            view.stop()
+            view.setPage(None)
+            view.deleteLater()
+        except RuntimeError:
+            pass
+        self.cover_view = None
+
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(15, 15, 15, 15)
@@ -369,8 +391,12 @@ class DownloadManagerTab(QWidget):
         content_layout = QHBoxLayout()
         content_layout.setSpacing(15)
         
+        from PyQt6.QtWebEngineCore import QWebEnginePage
         from PyQt6.QtWebEngineWidgets import QWebEngineView
         self.cover_view = QWebEngineView()
+        if self.media_profile is not None:
+            self.cover_view.setPage(
+                QWebEnginePage(self.media_profile, self.cover_view))
         self.cover_view.setFixedSize(130, 195)
         self.cover_view.page().setBackgroundColor(QColor(0, 0, 0, 0))
         content_layout.addWidget(self.cover_view)
@@ -747,10 +773,10 @@ class DownloadManagerTab(QWidget):
         """Collapse saved duplicates by dest_path, keeping one row per file."""
         deduped = dedupe_tasks(tasks, self._has_partial_file)
         if len(deduped) != len([task for task in tasks if isinstance(task, dict)]):
-            print("[DLManager] Collapsed duplicate download entries")
+            log.info("[DLManager] Collapsed duplicate download entries")
         for task in deduped:
             if task.get('_restart_partial'):
-                print(
+                log.info(
                     f"[DLManager] Provider conflict for "
                     f"{task.get('title') or task.get('filename')}: keeping "
                     f"{provider_key(task)}, partial from "
@@ -770,6 +796,7 @@ class DownloadManagerTab(QWidget):
             try:
                 worker.wait(3000)
             except Exception:
+                # best-effort: the worker may be finishing; cancellation is best-effort
                 pass
             if worker.isRunning():
                 return False
@@ -780,9 +807,9 @@ class DownloadManagerTab(QWidget):
         try:
             if dest and os.path.exists(dest):
                 os.remove(dest)
-                print(f"[DLManager] Removed incompatible partial: {dest}")
+                log.info(f"[DLManager] Removed incompatible partial: {dest}")
         except OSError as exc:
-            print(f"[DLManager] Could not remove partial file: {exc}")
+            log.exception(f"[DLManager] Could not remove partial file: {exc}")
         if dest:
             clear_incomplete(dest)
 
@@ -1001,6 +1028,7 @@ class DownloadManagerTab(QWidget):
             try:
                 worker.wait(3000)
             except Exception:
+                # best-effort: the worker may be finishing; cancellation is best-effort
                 pass
             self._cleanup_worker()
         task = self.current_task
@@ -1260,9 +1288,9 @@ class DownloadManagerTab(QWidget):
         try:
             if dest and os.path.exists(dest):
                 os.remove(dest)
-                print(f"[DLManager] Removed incompatible partial: {dest}")
+                log.info(f"[DLManager] Removed incompatible partial: {dest}")
         except OSError as exc:
-            print(f"[DLManager] Could not remove partial file: {exc}")
+            log.exception(f"[DLManager] Could not remove partial file: {exc}")
         if dest:
             clear_incomplete(dest)
         previous = task.pop('_provider_conflict', '')
@@ -1290,6 +1318,9 @@ class DownloadManagerTab(QWidget):
         self.active_worker.cf_bypass_needed.connect(self.cf_bypass_requested.emit)
         self.active_worker.gate_fallback_needed.connect(self.gate_fallback_requested.emit)
         self.active_worker.resume_detected.connect(self.resume_detected.emit)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(self.active_worker)
         self.active_worker.start()
 
     def _cleanup_worker(self):
@@ -1357,7 +1388,7 @@ class DownloadManagerTab(QWidget):
             self.active_worker.cancel()
         if self.current_task and os.path.exists(self.current_task['dest_path']):
             try: os.remove(self.current_task['dest_path'])
-            except: pass
+            except OSError: pass
         if self.current_task:
             dest = self.current_task.get('dest_path')
             clear_incomplete(dest)
@@ -1484,7 +1515,7 @@ class DownloadManagerTab(QWidget):
             if os.path.exists(dest):
                 os.remove(dest)
         except OSError as exc:
-            print(f"[DLManager] Could not delete partial file: {exc}")
+            log.exception(f"[DLManager] Could not delete partial file: {exc}")
         clear_incomplete(dest)
         self.clear_dismissed(dest)
         clear_extraction_state(dest)
@@ -1506,7 +1537,7 @@ class DownloadManagerTab(QWidget):
             if archive and os.path.exists(archive):
                 os.remove(archive)
         except OSError as exc:
-            print(f"[DLManager] Could not delete archive: {exc}")
+            log.exception(f"[DLManager] Could not delete archive: {exc}")
         clear_incomplete(archive)
         clear_extraction_state(archive)
         self.remove_pending_extraction(archive)
@@ -1625,6 +1656,7 @@ class DownloadManagerTab(QWidget):
             completed = self.current_task.copy()
             completed['eta_text'] = 'COMPLETED'
             self.completed_tasks.append(completed)
+            trim_list(self.completed_tasks, COMPLETED_TASKS_LIMIT)
 
         if extraction_id:
             entry = next(
@@ -1676,7 +1708,7 @@ class DownloadManagerTab(QWidget):
         ]
         self.pending_extractions.append(entry)
         self.save_state()
-        print(f"[DLManager] Pending extraction salvata: {entry['title']} ({archive_path})")
+        log.info(f"[DLManager] Pending extraction salvata: {entry['title']} ({archive_path})")
         return entry
 
     def prepare_extraction(self, archive_path, task_data, make_active=False):
@@ -1739,7 +1771,7 @@ class DownloadManagerTab(QWidget):
             else:
                 stale.append(entry)
         if stale:
-            print(f"[DLManager] Rimossi {len(stale)} pending extraction non più su disco")
+            log.info(f"[DLManager] Rimossi {len(stale)} pending extraction non più su disco")
         self.pending_extractions = valid
         if valid:
             self.save_state()
@@ -1830,9 +1862,9 @@ class DownloadManagerTab(QWidget):
             legacy = os.path.join(folder, "dl_state.json")
             if not os.path.exists(path) and os.path.exists(legacy):
                 os.replace(legacy, path)
-                print(f"[DLManager] Migrated {legacy} to {path}")
+                log.info(f"[DLManager] Migrated {legacy} to {path}")
         except OSError as exc:
-            print(f"[DLManager] Could not migrate the state file: {exc}")
+            log.exception(f"[DLManager] Could not migrate the state file: {exc}")
 
     def _set_state_attributes(self, attributes):
         if os.name != "nt" or not getattr(self, "state_file", ""):
@@ -1879,7 +1911,7 @@ class DownloadManagerTab(QWidget):
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"[DLManager] Error saving state: {e}")
+            log.exception(f"[DLManager] Error saving state: {e}")
         finally:
             self._hide_state_file()
 
@@ -1906,7 +1938,7 @@ class DownloadManagerTab(QWidget):
                 if normalize_dest_path(entry.get('archive_path')) not in active_keys
             ]
             if len(filtered_pending) != len(pending):
-                print(
+                log.info(
                     "[DLManager] Removed pending extractions already present "
                     "in the download queue"
                 )
@@ -1932,4 +1964,4 @@ class DownloadManagerTab(QWidget):
             self.save_state()
                 
         except Exception as e:
-            print(f"[DLManager] Error loading state: {e}")
+            log.exception(f"[DLManager] Error loading state: {e}")

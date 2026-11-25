@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -37,7 +38,8 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -56,12 +58,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -87,6 +88,8 @@ from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
 
+log = logging.getLogger(__name__)
+
 # --- APP WINDOW PRINCIPALE ---
 
 class VersionController:
@@ -102,16 +105,20 @@ class VersionController:
         worker.checked.connect(self._on_page_freshness_checked)
         worker.finished.connect(lambda w=worker: self._cleanup_page_worker(w))
         self._active_page_workers.append(worker)
+        self.tasks.track(worker)
         worker.start()
 
     def _on_page_freshness_checked(self, url, fresh):
+        if fresh is None:
+            log.debug(f"[App] freshness check unavailable for '{url}'")
+            return
         if fresh:
             return
-        print(f"[App] HTTP stale per '{url}', re-extract in background")
+        log.info(f"[App] HTTP stale per '{url}', re-extract in background")
         try:
             self.scraper.extract_game(url)
         except Exception as e:
-            print(f"[App] background re-extract failed: {e}")
+            log.exception(f"[App] background re-extract failed: {e}")
 
     def _fetch_page_headers_async(self, url):
         if not url:
@@ -120,6 +127,7 @@ class VersionController:
         worker.headers_ready.connect(self._on_page_headers_ready)
         worker.finished.connect(lambda w=worker: self._cleanup_page_worker(w))
         self._active_page_workers.append(worker)
+        self.tasks.track(worker)
         worker.start()
 
     def _on_page_headers_ready(self, url, etag, last_modified):
@@ -143,12 +151,13 @@ class VersionController:
         worker.status_ready.connect(self._on_version_status_backfilled)
         worker.finished.connect(lambda w=worker: self._cleanup_page_worker(w))
         self._active_page_workers.append(worker)
+        self.tasks.track(worker)
         worker.start()
 
     def _on_version_status_backfilled(self, title, url, status):
         if status:
             self.master_catalog.set_version_status(title, status)
-            print(f"[VersionStatus] backfill OK per '{title}': "
+            log.debug(f"[VersionStatus] backfill OK per '{title}': "
                   f"posted={status.get('posted_build')} steam={status.get('steam_build')}")
             entry = self.session_cache.get(url)
             if entry is not None:
@@ -166,7 +175,7 @@ class VersionController:
                 "alert": CLEAR,
                 "subtext": CLEAR,
             })
-            print(f"[VersionStatus] nessun widget Version Status per '{title}'")
+            log.debug(f"[VersionStatus] nessun widget Version Status per '{title}'")
 
         if self._version_status_current_title == title:
             self._recompute_version_status(title)
@@ -379,6 +388,7 @@ class VersionController:
         worker.failed.connect(self._on_steam_build_failed)
         worker.finished.connect(lambda w=worker: self._cleanup_steam_build_worker(w))
         self._active_steam_build_workers.append(worker)
+        self.tasks.track(worker)
         worker.start()
 
     def _on_steam_build_ready(self, title, app_id, build, date_str, timestamp):

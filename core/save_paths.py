@@ -26,6 +26,21 @@ LEGACY_SHELL_FOLDERS = {
 
 _VARIABLE_SEGMENT = re.compile(r"[<\[\(\{].+[>\]\)\}]")
 
+# Portable tokens that only make sense on the machine that owns the files.
+STEAM_FOLDER_TOKENS = ("<steam-folder>", "<steamfolder>", "<steam>")
+STEAM_ACCOUNT_TOKENS = (
+    "<storeuserid>",
+    "<your-steam-userid>",
+    "<steam-userid>",
+    "<steamuserid>",
+    "<userid>",
+    "<accountid>",
+    "<steamid>",
+)
+_ACCOUNT_TOKEN_RE = re.compile(
+    r"(?i)<(?:storeuserid|your-steam-userid|steam-userid|steamuserid|userid|accountid|steamid)>"
+)
+
 
 # ---------------------------------------------------------------- predicates
 
@@ -135,8 +150,11 @@ def resolve_relative(base, relative_path):
     for index, part in enumerate(raw_parts):
         match = find_matching_child(current, part)
         if match is None:
-            output_parts.extend(raw_parts[index:])
-            return os.path.join(current, *output_parts)
+            # Join only what is still missing: the parts already resolved are
+            # part of ``current`` and must not be appended again (that used to
+            # turn ``Documents`` + a missing ``My Games`` into
+            # ``Documents/Documents/My Games``).
+            return os.path.join(current, *raw_parts[index:])
 
         if is_variable_folder_segment(part) or "*" in part or "?" in part:
             output_parts.append(match)
@@ -322,21 +340,255 @@ def default_compatdata_base(app_id, roots=None) -> str:
     return os.path.join(candidates[0], "compatdata", app_id)
 
 
+# ------------------------------------------------------ steam userdata paths
+
+
+def _dedupe_paths(paths) -> list[str]:
+    seen = set()
+    result = []
+    for path in paths:
+        key = os.path.normcase(os.path.normpath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def steam_client_roots(extra_paths=()) -> list[str]:
+    """Steam client install folders (the parent of ``steamapps``)."""
+    return _dedupe_paths(
+        os.path.dirname(os.path.normpath(root)) for root in steamapps_roots(extra_paths)
+    )
+
+
+def steam_userdata_roots(extra_paths=()) -> list[str]:
+    """Existing ``userdata`` folders of the local Steam clients (native/Flatpak)."""
+    return _dedupe_paths(
+        candidate
+        for candidate in (
+            os.path.join(client, "userdata") for client in steam_client_roots(extra_paths)
+        )
+        if os.path.isdir(candidate)
+    )
+
+
+def _steam_account_dirs(roots):
+    """``(userdata_root, account_id, account_path)`` for numeric account folders."""
+    accounts = []
+    for root in roots:
+        try:
+            names = os.listdir(root)
+        except OSError:
+            continue
+        for name in names:
+            if not name.isdigit() or name == "0":
+                continue
+            path = os.path.join(root, name)
+            if os.path.isdir(path):
+                accounts.append((root, name, path))
+    return accounts
+
+
+def _account_mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def default_steam_account_id(roots=None) -> str:
+    """Numeric id of the most recently used local Steam account, or ``""``."""
+    accounts = _steam_account_dirs(
+        roots if roots is not None else steam_userdata_roots()
+    )
+    if not accounts:
+        return ""
+    _root, name, path = max(accounts, key=lambda item: _account_mtime(item[2]))
+    return name
+
+
+def find_steam_userdata_path(relative, roots=None, account_id="") -> str:
+    """Map ``userdata\\<account>\\<appid>\\...`` to the local Steam userdata.
+
+    ``relative`` is the part after ``userdata``. The account may be a literal
+    id (valid on every OS), a placeholder or omitted entirely (``""``); a
+    placeholder resolves to ``account_id`` when given, then to the account
+    folder that owns the appid, then to the most recently used one.
+    """
+    parts = [p for p in re.split(r"[\\/]+", str(relative or "")) if p]
+    if not parts:
+        return ""
+    if roots is None:
+        roots = steam_userdata_roots()
+    roots = list(roots)
+    if not roots:
+        return ""
+
+    account_token, rest = parts[0], parts[1:]
+    appid = rest[0] if rest else ""
+    accounts = _steam_account_dirs(roots)
+
+    if account_token.casefold() in STEAM_ACCOUNT_TOKENS:
+        chosen = None
+        preferred = str(account_id or "").strip()
+        if preferred:
+            for root, name, _path in accounts:
+                if name == preferred:
+                    chosen = (root, name)
+                    break
+        if chosen is None and appid:
+            for root, name, path in accounts:
+                if os.path.isdir(os.path.join(path, appid)):
+                    chosen = (root, name)
+                    break
+        if chosen is None and accounts:
+            root, name, path = max(accounts, key=lambda item: _account_mtime(item[2]))
+            chosen = (root, name)
+        if chosen is None:
+            return ""
+        root, account = chosen
+    else:
+        if "<" in account_token or ">" in account_token:
+            return ""
+        root = ""
+        for account_root, name, _path in accounts:
+            if name.casefold() == account_token.casefold():
+                root = account_root
+                break
+        if not root:
+            root = roots[0]
+        account = account_token
+
+    return resolve_case_insensitive(os.path.join(root, account, *rest))
+
+
+def steam_userdata_tail(path):
+    """Return the part after ``userdata``, or ``None`` when not that path.
+
+    Accepts ``<steam-folder>\\userdata\\...``, expanded Windows paths
+    (``C:\\Program Files (x86)\\Steam\\userdata\\...``) and the manifest form
+    ``<root>\\userdata\\<storeUserId>\\<appid>\\...``, which is the Steam client
+    folder even though it does not name ``Steam``.
+    """
+    text = str(path or "").replace("/", "\\")
+    lower = text.casefold()
+    for token in STEAM_FOLDER_TOKENS:
+        if lower.startswith(token + "\\"):
+            tail = text[len(token) + 1:]
+            tail_lower = tail.casefold()
+            if tail_lower == "userdata" or tail_lower.startswith("userdata\\"):
+                return tail[len("userdata"):].lstrip("\\")
+            return None
+    parts = [p for p in text.split("\\") if p]
+    for index in range(len(parts) - 2):
+        if parts[index].casefold() != "userdata":
+            continue
+        account = parts[index + 1]
+        appid = parts[index + 2]
+        if (account.casefold() in STEAM_ACCOUNT_TOKENS or account.isdigit()) and appid.isdigit():
+            return "\\".join(parts[index + 1:])
+    return None
+
+
+def steam_folder_tail(path):
+    """Return the part after ``<steam-folder>``, or ``None``."""
+    text = str(path or "").replace("/", "\\")
+    lower = text.casefold()
+    for token in STEAM_FOLDER_TOKENS:
+        if lower.startswith(token + "\\"):
+            return text[len(token) + 1:]
+    return None
+
+
+def find_steam_folder_path(tail) -> str:
+    """Resolve a path relative to the Linux Steam client folder."""
+    candidates = [
+        os.path.join(client, str(tail or "")) for client in steam_client_roots()
+    ]
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return resolve_case_insensitive(candidate)
+    return resolve_case_insensitive(candidates[0]) if candidates else ""
+
+
+def replace_steam_account_token(path, account_id) -> str:
+    """Replace ``<storeUserId>`` and friends with a concrete account id."""
+    return _ACCOUNT_TOKEN_RE.sub(lambda _match: str(account_id), str(path or ""))
+
+
 # ----------------------------------------------------------------- translation
 
 
-def translate_win_path(win_path, compatdata_base_path) -> str:
-    """Map a portable Windows save path to its Proton prefix location.
+def translate_win_path_details(win_path, compatdata_base_path, steam_roots=None,
+                              account_id="") -> dict:
+    """Explain how a portable save path maps on this machine.
 
-    Returns ``""`` when the path uses a token we do not know. The caller must
-    pass the compatdata folder of the game (``.../compatdata/<app_id>``).
+    ``kind`` is ``prefix`` (inside the Proton/Wine prefix), ``steam`` (the
+    Linux Steam client) or ``native`` (a POSIX path used as-is). ``reason`` is
+    empty on success, otherwise a stable code the UI can explain.
     """
-    if not win_path or not compatdata_base_path:
-        return ""
+    result = {"path": "", "kind": "", "reason": "", "token": ""}
+    original = str(win_path or "").strip().strip('"')
+    if not original:
+        result["reason"] = "empty"
+        return result
 
-    original = str(win_path).strip().strip('"')
+    if is_posix_path(original):
+        text = original
+        if text.startswith("~") or text.startswith("/"):
+            text = text.replace("\\", "/")
+        result["path"] = resolve_absolute(text)
+        result["kind"] = "native"
+        return result
+
     path = original.replace("/", "\\")
-    lower_path = path.lower()
+    lower_path = path.casefold()
+
+    # Steam userdata lives in the Linux client, never inside the game prefix.
+    tail = steam_userdata_tail(path)
+    if tail is not None:
+        result["kind"] = "steam"
+        mapped = find_steam_userdata_path(tail, steam_roots, account_id)
+        if not mapped:
+            result["reason"] = "steam_userdata_not_found"
+            return result
+        result["path"] = mapped
+        return result
+
+    tail = steam_folder_tail(path)
+    if tail is not None:
+        result["kind"] = "steam"
+        mapped = find_steam_folder_path(tail)
+        if not mapped:
+            result["reason"] = "steam_folder_not_found"
+            return result
+        result["path"] = mapped
+        return result
+
+    # ``<storeUserId>`` also appears outside Steam userdata (for example
+    # ``%appdata%\Game\<storeUserId>\slot.sav``): it is this machine's
+    # Steam account id there too.
+    if _ACCOUNT_TOKEN_RE.search(path):
+        account = str(account_id or "").strip() or default_steam_account_id(steam_roots)
+        if not account:
+            result["reason"] = "account_not_found"
+            return result
+        path = replace_steam_account_token(path, account)
+        lower_path = path.casefold()
+
+    unknown = re.search(r"<[^<>]+>", path)
+    if unknown:
+        result["reason"] = "unknown_placeholder"
+        result["token"] = unknown.group(0)
+        return result
+
+    if not compatdata_base_path:
+        result["kind"] = "prefix"
+        result["reason"] = "no_compatdata"
+        return result
+
+    result["kind"] = "prefix"
 
     def from_rel(relative, sub_path):
         base = os.path.join(compatdata_base_path, sub_path)
@@ -344,42 +596,69 @@ def translate_win_path(win_path, compatdata_base_path) -> str:
         return resolve_case_insensitive(resolve_relative(base, rel))
 
     if lower_path.startswith("%userprofile%\\"):
-        return from_rel(path[len("%userprofile%\\"):], "pfx/drive_c/users/steamuser")
+        result["path"] = from_rel(path[len("%userprofile%\\"):], "pfx/drive_c/users/steamuser")
+        return result
+
+    if lower_path.startswith("%username%\\"):
+        result["path"] = from_rel(path[len("%username%\\"):], "pfx/drive_c/users/steamuser")
+        return result
 
     if lower_path.startswith("%programdata%"):
-        return from_rel(path[len("%programdata%"):].lstrip("\\"), "pfx/drive_c/ProgramData")
+        result["path"] = from_rel(path[len("%programdata%"):].lstrip("\\"), "pfx/drive_c/ProgramData")
+        return result
 
     if lower_path.startswith("%public%"):
-        return from_rel(path[len("%public%"):].lstrip("\\"), "pfx/drive_c/users/Public")
+        result["path"] = from_rel(path[len("%public%"):].lstrip("\\"), "pfx/drive_c/users/Public")
+        return result
 
     if lower_path.startswith("%windir%"):
-        return from_rel(path[len("%windir%"):].lstrip("\\"), "pfx/drive_c/windows")
+        result["path"] = from_rel(path[len("%windir%"):].lstrip("\\"), "pfx/drive_c/windows")
+        return result
 
     if lower_path.startswith("%localappdata%"):
-        return from_rel(
+        result["path"] = from_rel(
             path[len("%localappdata%"):].lstrip("\\"),
             "pfx/drive_c/users/steamuser/AppData/Local",
         )
+        return result
 
     if lower_path.startswith("%appdata%"):
-        return from_rel(
+        result["path"] = from_rel(
             path[len("%appdata%"):].lstrip("\\"),
             "pfx/drive_c/users/steamuser/AppData/Roaming",
         )
+        return result
 
     if lower_path.startswith("c:\\users\\steamuser\\"):
-        return from_rel(path[len("c:\\users\\steamuser\\"):], "pfx/drive_c/users/steamuser")
+        result["path"] = from_rel(path[len("c:\\users\\steamuser\\"):], "pfx/drive_c/users/steamuser")
+        return result
 
     if lower_path.startswith("c:\\users\\"):
         parts = path.split("\\")
         if len(parts) > 2:
-            return from_rel("\\".join(parts[3:]), "pfx/drive_c/users/steamuser")
-        return ""
+            result["path"] = from_rel("\\".join(parts[3:]), "pfx/drive_c/users/steamuser")
+            return result
+        result["reason"] = "unsupported"
+        return result
 
     if lower_path.startswith("c:\\"):
-        return from_rel(path[len("c:\\"):], "pfx/drive_c")
+        result["path"] = from_rel(path[len("c:\\"):], "pfx/drive_c")
+        return result
 
-    return ""
+    result["reason"] = "unsupported"
+    return result
+
+
+def translate_win_path(win_path, compatdata_base_path, account_id="") -> str:
+    """Map a portable Windows save path to its Proton prefix location.
+
+    Returns ``""`` when the path uses a token we do not know. The caller must
+    pass the compatdata folder of the game (``.../compatdata/<app_id>``), which
+    Steam userdata paths do not need.
+    """
+    return translate_win_path_details(
+        win_path, compatdata_base_path, account_id=account_id
+    )["path"]
 
 
 # ------------------------------------------------------------ restore safety

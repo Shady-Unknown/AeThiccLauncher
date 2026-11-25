@@ -1,15 +1,17 @@
 # installer.py
 import os
+import logging
 import json
 import re
-import sys
 import subprocess
 import time
 from datetime import datetime
 from PyQt6.QtCore import QThread, pyqtSignal
-from core.config import get_base_dir
+from core import archive_utils
 from core.download_queue_model import clear_extraction_state, write_extraction_state
 from core.meta_utils import EXTRACTING_MARKER, save_steamrip_meta
+
+log = logging.getLogger(__name__)
 
 # Chiavi di metadati da conservare quando aggiorniamo un'installazione esistente
 # (aggiornamento in-place di una versione full re-download). Tutte le altre chiavi
@@ -57,13 +59,9 @@ class GameInstaller(QThread):
 
             self.progress_update.emit(f"Estrazione in corso di {safe_title}... (Potrebbe volerci molto tempo)")
 
-            base_dir = get_base_dir()
-            if sys.platform == "win32":
-                seven_z_bin = os.path.join(base_dir, "bin", "Windows", "x64", "7z.exe")
-            else:
-                seven_z_bin = os.path.join(base_dir, "bin", "Linux", "7zz")
+            seven_z_bin = archive_utils.seven_zip_path()
 
-            if sys.platform != "win32" and os.path.exists(seven_z_bin):
+            if os.name != "nt" and os.path.exists(seven_z_bin):
                 try:
                     os.chmod(seven_z_bin, 0o755)
                 except OSError:
@@ -228,6 +226,6 @@ class GameInstaller(QThread):
                         if key in existing:
                             meta_dict[key] = existing[key]
                 except Exception as e:
-                    print(f"[Installer] Impossibile preservare i metadati esistenti: {e}")
+                    log.exception(f"[Installer] Impossibile preservare i metadati esistenti: {e}")
 
         save_steamrip_meta(install_path, meta_dict)

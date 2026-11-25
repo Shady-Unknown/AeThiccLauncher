@@ -17,13 +17,21 @@ from managers.mirror_backend import (
 from managers.save_manager import SavegamesManager
 
 
-def write_game(root, safe_title, title, ids, latest="", version=None, synced="2026-01-01T00:00:00Z"):
+def write_game(root, safe_title, title, ids, latest="", version=None,
+               synced="2026-01-01T00:00:00Z", complete=True, skip_info=()):
     game = Path(root) / safe_title
     (game / "saves").mkdir(parents=True, exist_ok=True)
     for snapshot_id in ids:
         folder = game / "saves" / snapshot_id
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "save.dat").write_text("state " + snapshot_id, encoding="utf-8")
+        if snapshot_id not in skip_info:
+            (folder / "snapshot.json").write_text(json.dumps({
+                "schema": 1,
+                "id": snapshot_id,
+                "complete": complete,
+                "version": version or {},
+            }), encoding="utf-8")
     manifest = {
         "game_title": title,
         "latest_snapshot": ("saves/" + latest) if latest else "",
@@ -79,13 +87,13 @@ class FolderMirrorTests(unittest.TestCase):
         (self.local / "Game_A" / "mini_cover.jpg").write_bytes(b"cover")
 
         first = self.backend.push()
-        self.assertEqual(first["copied"], 3)  # manifest + cover + save
+        self.assertEqual(first["copied"], 4)  # manifest + cover + save + snapshot.json
         self.assertEqual(first["errors"], [])
         self.assertTrue((self.mirror / "Game_A" / "saves" / "20260101_120000" / "save.dat").is_file())
 
         second = self.backend.push()
         self.assertEqual(second["copied"], 0)
-        self.assertEqual(second["skipped"], 3)
+        self.assertEqual(second["skipped"], 4)
 
     def test_push_updates_changed_files(self):
         write_game(self.local, "Game_A", "Game A", ["20260101_120000"], "20260101_120000")
@@ -108,6 +116,25 @@ class FolderMirrorTests(unittest.TestCase):
 
         self.backend.push()
 
+        self.assertTrue(extra.is_file())
+
+    def test_push_cancels_between_files_and_never_deletes(self):
+        write_game(self.local, "Game_A", "Game A", ["20260101_120000"], "20260101_120000")
+        (self.local / "Game_A" / "mini_cover.jpg").write_bytes(b"cover")
+        self.mirror.mkdir()
+        extra = self.mirror / "kept.txt"
+        extra.write_text("keep me", encoding="utf-8")
+        calls = {"count": 0}
+
+        def should_cancel():
+            calls["count"] += 1
+            return calls["count"] > 2
+
+        report = self.backend.push(should_cancel=should_cancel)
+
+        self.assertTrue(report["cancelled"])
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(report["copied"], 1)
         self.assertTrue(extra.is_file())
 
     def test_push_skips_root_hidden_and_excluded_files(self):
@@ -193,6 +220,7 @@ class FolderMirrorTests(unittest.TestCase):
     def test_write_manifest(self):
         write_game(self.local, "Game_A", "Game A", ["20260101_120000"], "20260101_120000",
                    version={"build": 42})
+        self.backend.push()
 
         payload = self.backend.write_manifest(device_id="abc")
 
@@ -255,5 +283,229 @@ class ManagerMirrorTests(unittest.TestCase):
         self.assertTrue((self.mirror / "backup_manifest.json").is_file())
 
 
+class PublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.local = self.root / "Staging"
+        self.mirror = self.root / "Mirror"
+        self.local.mkdir()
+        self.backend = FolderMirrorBackend(str(self.local), str(self.mirror))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_incomplete_local_snapshot_is_not_published(self):
+        write_game(self.local, "Game_A", "Game A",
+                   ["20260101_120000", "20260102_120000"], "20260102_120000")
+        (self.local / "Game_A" / "saves" / "20260102_120000"
+         / "snapshot.json").write_text(
+            json.dumps({"schema": 1, "complete": False}), encoding="utf-8")
+
+        report = self.backend.push()
+
+        self.assertEqual(report["errors"], [])
+        self.assertTrue(
+            (self.mirror / "Game_A" / "saves" / "20260101_120000").is_dir())
+        self.assertFalse(
+            (self.mirror / "Game_A" / "saves" / "20260102_120000").exists())
+
+        states = {entry["safe_title"]: entry for entry in self.backend.compare()}
+        self.assertEqual(states["Game_A"]["local_latest"], "20260102_120000")
+        self.assertEqual(states["Game_A"]["mirror_latest"], "20260101_120000")
+
+        payload = self.backend.write_manifest()
+        self.assertEqual(payload["games"]["Game_A"]["latest_snapshot"],
+                         "20260101_120000")
+
+    def test_incomplete_and_partial_mirror_snapshots_are_not_imported(self):
+        write_game(self.mirror, "Game_A", "Game A",
+                   ["20260101_120000"], "20260101_120000")
+        write_game(self.mirror, "Game_B", "Game B",
+                   ["20260101_120000", "20260102_120000"], "20260102_120000")
+        (self.mirror / "Game_B" / "saves" / "20260102_120000"
+         / "snapshot.json").write_text(
+            json.dumps({"schema": 1, "complete": False}), encoding="utf-8")
+
+        # Game_C: the local snapshot has an extra file, so the mirror copy is
+        # only a partial publication and must not be imported.
+        write_game(self.local, "Game_C", "Game C",
+                   ["20260101_120000"], "20260101_120000")
+        write_game(self.mirror, "Game_C", "Game C",
+                   ["20260101_120000"], "20260101_120000")
+        (self.local / "Game_C" / "saves" / "20260101_120000"
+         / "extra.sav").write_text("only local", encoding="utf-8")
+
+        self.backend.pull_missing()
+
+        self.assertTrue(
+            (self.local / "Game_A" / "saves" / "20260101_120000" / "save.dat").is_file())
+        self.assertTrue(
+            (self.local / "Game_B" / "saves" / "20260101_120000" / "save.dat").is_file())
+        self.assertFalse(
+            (self.local / "Game_B" / "saves" / "20260102_120000").exists())
+        # The partial Game_C snapshot was not touched or completed locally.
+        self.assertTrue(
+            (self.local / "Game_C" / "saves" / "20260101_120000" / "extra.sav").is_file())
+
+    def test_failed_push_keeps_the_manifest_and_retry_completes(self):
+        manager = object.__new__(SavegamesManager)
+        manager.parent = None
+        manager.installed_games = {}
+        manager.app_config = {"savegames": {"sync_folder": str(self.mirror)}}
+        manager.get_sync_folder = lambda: str(self.local)
+        manager._device_id = lambda root: "device"
+        write_game(self.local, "Game_A", "Game A",
+                   ["20260101_120000"], "20260101_120000")
+        manager.push_mirror()
+        manifest_path = self.mirror / "backup_manifest.json"
+        self.assertTrue(manifest_path.is_file())
+        before = manifest_path.read_bytes()
+
+        write_game(self.local, "Game_A", "Game A",
+                   ["20260101_120000", "20260102_120000"], "20260102_120000")
+        snapshot = self.local / "Game_A" / "saves" / "20260102_120000"
+        for index in range(3):
+            (snapshot / f"extra{index}.sav").write_text("x", encoding="utf-8")
+
+        real_copy = FolderMirrorBackend._copy_atomic
+        calls = {"count": 0}
+
+        def failing_copy(source, target):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise OSError("injected failure")
+            return real_copy(source, target)
+
+        with mock.patch.object(FolderMirrorBackend, "_copy_atomic",
+                               side_effect=failing_copy):
+            report = manager.push_mirror()
+
+        self.assertTrue(report["errors"])
+        self.assertGreaterEqual(calls["count"], 2)
+        self.assertEqual(manifest_path.read_bytes(), before)
+        # The file whose copy failed is still missing on the mirror.
+        self.assertFalse(
+            (self.mirror / "Game_A" / "saves" / "20260102_120000"
+             / "extra0.sav").exists())
+
+        # Retry reuses push() and only then is the snapshot advertised.
+        report = manager.push_mirror()
+        self.assertEqual(report["errors"], [])
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["games"]["Game_A"]["latest_snapshot"],
+                         "20260102_120000")
+
+    def test_game_only_on_the_mirror_appears_in_the_manifest(self):
+        write_game(self.mirror, "MirrorOnly", "Mirror Only",
+                   ["20260101_120000"], "20260101_120000")
+
+        payload = self.backend.write_manifest()
+
+        self.assertIn("MirrorOnly", payload["games"])
+        self.assertEqual(payload["games"]["MirrorOnly"]["latest_snapshot"],
+                         "20260101_120000")
+
+    def test_latest_snapshot_skips_the_unpublished_newest(self):
+        write_game(self.mirror, "Game_A", "Game A",
+                   ["20260101_120000", "20260102_120000"], "20260102_120000")
+        write_game(self.local, "Game_A", "Game A",
+                   ["20260101_120000", "20260102_120000"], "20260102_120000")
+        (self.local / "Game_A" / "saves" / "20260102_120000"
+         / "extra.sav").write_text("local only", encoding="utf-8")
+
+        payload = self.backend.write_manifest()
+
+        self.assertEqual(payload["games"]["Game_A"]["latest_snapshot"],
+                         "20260101_120000")
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_symlinked_snapshot_is_verified_by_target(self):
+        write_game(self.local, "Game_A", "Game A",
+                   ["20260101_120000"], "20260101_120000")
+        os.symlink("save.dat",
+                   self.local / "Game_A" / "saves" / "20260101_120000" / "link.sav")
+        self.backend.push()
+        self.assertIn("Game_A", self.backend.write_manifest()["games"])
+
+        mirror_link = (self.mirror / "Game_A" / "saves" / "20260101_120000"
+                       / "link.sav")
+        self.assertTrue(mirror_link.is_symlink())
+        os.remove(mirror_link)
+        os.symlink("snapshot.json", mirror_link)
+
+        self.assertNotIn("Game_A", self.backend.write_manifest()["games"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManagerMirrorFailureTests(unittest.TestCase):
+    def _manager(self):
+        from managers.save_manager import SavegamesManager
+        manager = object.__new__(SavegamesManager)
+        manager.get_sync_folder = lambda: "/staging"
+        manager.get_mirror_folder = lambda: "/mirror"
+        manager._device_id = lambda root: "device"
+        manager.ensure_mirror_import = lambda: {}
+        return manager
+
+    def test_partial_push_failure_keeps_the_previous_manifest(self):
+        manager = self._manager()
+        class Backend:
+            def __init__(self, *args, **kwargs):
+                pass
+            def push(self, exclude_names=(), should_cancel=None):
+                return {"configured": True, "copied": 1, "skipped": 0,
+                        "cancelled": False, "errors": ["one file failed"]}
+            def write_manifest(self, device_id=""):
+                raise AssertionError("manifest must not be rewritten after a partial push")
+        with mock.patch("managers.mirror_backend.FolderMirrorBackend", Backend):
+            report = manager.push_mirror()
+        self.assertEqual(report["errors"], ["one file failed"])
+
+    def test_clean_push_writes_the_manifest(self):
+        manager = self._manager()
+        called = []
+        class Backend:
+            def __init__(self, *args, **kwargs):
+                pass
+            def push(self, exclude_names=(), should_cancel=None):
+                return {"configured": True, "copied": 1, "skipped": 0,
+                        "cancelled": False, "errors": []}
+            def write_manifest(self, device_id=""):
+                called.append(device_id)
+        with mock.patch("managers.mirror_backend.FolderMirrorBackend", Backend):
+            manager.push_mirror()
+        self.assertEqual(called, ["device"])
+
+    def test_cancelled_push_does_not_start_or_write_the_manifest(self):
+        manager = self._manager()
+        manager.request_cancel()
+        class Backend:
+            def __init__(self, *args, **kwargs):
+                pass
+            def push(self, exclude_names=(), should_cancel=None):
+                raise AssertionError("a cancelled push must not start")
+            def write_manifest(self, device_id=""):
+                raise AssertionError("no manifest after cancellation")
+        with mock.patch("managers.mirror_backend.FolderMirrorBackend", Backend):
+            report = manager.push_mirror()
+        self.assertTrue(report["cancelled"])
+        self.assertEqual(report["copied"], 0)
+
+    def test_partial_push_cancel_keeps_the_previous_manifest(self):
+        manager = self._manager()
+        class Backend:
+            def __init__(self, *args, **kwargs):
+                pass
+            def push(self, exclude_names=(), should_cancel=None):
+                return {"configured": True, "copied": 1, "skipped": 0,
+                        "cancelled": True, "errors": []}
+            def write_manifest(self, device_id=""):
+                raise AssertionError("manifest must not be rewritten after cancel")
+        with mock.patch("managers.mirror_backend.FolderMirrorBackend", Backend):
+            report = manager.push_mirror()
+        self.assertTrue(report["cancelled"])
+        self.assertEqual(report["copied"], 1)

@@ -1,6 +1,9 @@
+import logging
 import re
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
+
+log = logging.getLogger(__name__)
 
 class StoreLinksWorker(QThread):
     links_ready = pyqtSignal(str, str, str) 
@@ -54,7 +57,7 @@ class StoreLinksWorker(QThread):
                         steam_url = f"https://store.steampowered.com/app/{item['id']}"
                         best_score = 1 # Salviamo come riserva e continuiamo a cercare
         except Exception as e:
-            print(f"[Store Worker] Steam Error: {e}")
+            log.exception(f"[Store Worker] Steam Error: {e}")
 
         if not steam_url:
             steam_url = f"https://store.steampowered.com/search/?term={url_safe_title}"
@@ -79,7 +82,7 @@ class StoreLinksWorker(QThread):
                             gog_url = f"https://www.gog.com/en/game/{slug}"
                             best_score = 1
         except Exception as e:
-            print(f"[Store Worker] GOG API Error: {e}")
+            log.exception(f"[Store Worker] GOG API Error: {e}")
 
         self.links_ready.emit(steam_url, gog_url, self.game_title)
 

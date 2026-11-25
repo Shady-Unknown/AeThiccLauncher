@@ -11,10 +11,15 @@ from managers import save_manager as save_manager_module
 from managers.save_manager import SavegamesManager
 
 
-def make_manager(keep_snapshots=5):
+def make_manager(keep_snapshots=5, snapshot_hash=False):
     manager = object.__new__(SavegamesManager)
     manager.parent = None
-    manager.app_config = {'savegames': {'keep_snapshots': keep_snapshots}}
+    manager.app_config = {
+        'savegames': {
+            'keep_snapshots': keep_snapshots,
+            'snapshot_hash': snapshot_hash,
+        }
+    }
     manager.installed_games = {}
     return manager
 
@@ -244,6 +249,58 @@ class PreUpdateBackupTests(unittest.TestCase):
             self.assertEqual(len(snapshots), 1)
             info = json.loads((snapshots[0] / "snapshot.json").read_text(encoding="utf-8"))
             self.assertEqual(info["reason"], "pre_update")
+
+
+class SnapshotFingerprintTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.game_root = self.root / "Staging" / "Game"
+        self.source = self.root / "save_source"
+        self.source.mkdir(parents=True)
+        self.file = self.source / "slot1.sav"
+        self.file.write_text("hello", encoding="utf-8")
+        self.original_stat = self.file.stat()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _rewrite_same_size_and_mtime(self):
+        self.file.write_text("HELLO", encoding="utf-8")
+        os.utime(self.file, ns=(self.original_stat.st_atime_ns,
+                                self.original_stat.st_mtime_ns))
+
+    def _create(self, manager):
+        return manager.create_snapshot(
+            str(self.game_root), "Game", {"version": "Build 1"},
+            str(self.source), reason="sync",
+        )
+
+    def test_metadata_mode_skips_same_size_and_mtime_change(self):
+        manager = make_manager(snapshot_hash=False)
+        first = self._create(manager)
+        self.assertTrue(first["created"])
+
+        self._rewrite_same_size_and_mtime()
+        second = self._create(manager)
+
+        self.assertTrue(second["unchanged"])
+
+    def test_hash_mode_detects_same_size_and_mtime_change(self):
+        manager = make_manager(snapshot_hash=True)
+        first = self._create(manager)
+        self.assertTrue(first["created"])
+
+        self._rewrite_same_size_and_mtime()
+        second = self._create(manager)
+
+        self.assertTrue(second["created"])
+
+    def test_hash_mode_falls_back_to_metadata_above_budget(self):
+        meta = save_manager_module._snapshot_content_signature(self.source, False)
+        fallback = save_manager_module._snapshot_content_signature(
+            self.source, True, max_bytes=0)
+        self.assertEqual(meta, fallback)
 
 
 if __name__ == "__main__":

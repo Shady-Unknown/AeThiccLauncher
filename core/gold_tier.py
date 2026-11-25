@@ -1,13 +1,17 @@
+import logging
 import os
 import json
 import re
 import threading
 import time
-import unicodedata
 import difflib
 import requests
 
+from core import titles
+from core.atomic_io import atomic_write_json
 from core.paths import PathManager
+
+log = logging.getLogger(__name__)
 
 # Temporary: the gold tier list still lives in the current closed-source public
 # repo. When the open-source repo ships lists/gold_tier_games.json and the
@@ -70,11 +74,10 @@ class GoldTierManager:
                     if os.path.isfile(candidate):
                         data = cls._load_local(candidate)
                         if data:
-                            with open(local_path, "w", encoding="utf-8") as f:
-                                json.dump(data, f, indent=2, ensure_ascii=False)
+                            atomic_write_json(local_path, data, indent=2, fsync=True)
                             break
             except Exception as exc:
-                print(f"[GoldTier] seed failed: {exc}")
+                log.exception(f"[GoldTier] seed failed: {exc}")
         cls._apply_data(data)
 
     @classmethod
@@ -82,9 +85,9 @@ class GoldTierManager:
         cls._gold_data = cls._normalize_data(data if isinstance(data, dict) else {})
         cls._build_lookup()
         if cls._gold_data:
-            print(f"[GoldTier] Loaded {len(cls._gold_data)} entries")
+            log.info(f"[GoldTier] Loaded {len(cls._gold_data)} entries")
         else:
-            print("[GoldTier] Data is empty — will retry in background")
+            log.info("[GoldTier] Data is empty — will retry in background")
 
     @classmethod
     def _schedule_refresh(cls):
@@ -101,6 +104,10 @@ class GoldTierManager:
             name="gold-tier-refresh",
             daemon=True,
         )
+        from core.task_registry import TaskRegistry
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track_thread(thread)
         thread.start()
 
     @classmethod
@@ -137,10 +144,10 @@ class GoldTierManager:
                         else:
                             needs_download = True
                     else:
-                        print(f"[GoldTier] HEAD returned {resp.status_code}, using cached")
+                        log.info(f"[GoldTier] HEAD returned {resp.status_code}, using cached")
                         needs_download = False
                 except Exception as exc:
-                    print(f"[GoldTier] HEAD failed ({exc}), using cached")
+                    log.exception(f"[GoldTier] HEAD failed ({exc}), using cached")
                     needs_download = False
 
             if not needs_download:
@@ -149,11 +156,10 @@ class GoldTierManager:
             try:
                 resp = requests.get(GOLD_TIER_URL, timeout=15, headers={"User-Agent": _UA})
                 if resp.status_code != 200:
-                    print(f"[GoldTier] GET returned {resp.status_code}, falling back to cache")
+                    log.info(f"[GoldTier] GET returned {resp.status_code}, falling back to cache")
                     return
                 data = resp.json()
-                with open(local_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                atomic_write_json(local_path, data, indent=2, fsync=True)
                 new_meta = {}
                 etag = resp.headers.get("ETag")
                 last_modified = resp.headers.get("Last-Modified")
@@ -161,11 +167,10 @@ class GoldTierManager:
                     new_meta["etag"] = etag
                 if last_modified:
                     new_meta["last_modified"] = last_modified
-                with open(meta_path, "w", encoding="utf-8") as f:
-                    json.dump(new_meta, f)
+                atomic_write_json(meta_path, new_meta, fsync=True)
                 cls._apply_data(data if isinstance(data, dict) else {})
             except Exception as exc:
-                print(f"[GoldTier] GET failed ({exc}), using cached")
+                log.exception(f"[GoldTier] GET failed ({exc}), using cached")
         finally:
             with cls._refresh_lock:
                 cls._refresh_inflight = False
@@ -177,7 +182,7 @@ class GoldTierManager:
             for entry in data["gold_tier"]:
                 if isinstance(entry, dict) and entry.get("title"):
                     rebuilt[entry["title"]] = entry
-            print(f"[GoldTier] Rebuilt list into dict: {len(rebuilt)} entries")
+            log.info(f"[GoldTier] Rebuilt list into dict: {len(rebuilt)} entries")
             return rebuilt
         if data:
             sample = next(iter(data.values()))
@@ -188,7 +193,7 @@ class GoldTierManager:
                         rebuilt[entry["title"]] = entry
                     else:
                         rebuilt[key] = entry
-                print(f"[GoldTier] Rebuilt from indexed dict: {len(rebuilt)} entries")
+                log.info(f"[GoldTier] Rebuilt from indexed dict: {len(rebuilt)} entries")
                 return rebuilt
         return data
 
@@ -208,12 +213,7 @@ class GoldTierManager:
 
     @staticmethod
     def _normalize(s: str) -> str:
-        s = re.sub(r"[™®©]", "", s)
-        s = unicodedata.normalize("NFKD", s)
-        s = s.encode("ascii", "ignore").decode("ascii")
-        s = re.sub(r"[^\w\s-]", "", s)
-        s = re.sub(r"\s+", " ", s).strip()
-        return s.lower()
+        return titles.normalize_title(s)
 
     @staticmethod
     def _load_local(path):
@@ -241,8 +241,8 @@ class GoldTierManager:
         if game_title not in cls._debug_printed:
             cls._debug_printed.add(game_title)
             sample_keys = list(cls._gold_data.keys())[:5]
-            print(f"[GoldTier] No title match for '{game_title}' (normalized: '{norm}')")
-            print(f"[GoldTier] First 5 gold keys: {sample_keys}")
+            log.info(f"[GoldTier] No title match for '{game_title}' (normalized: '{norm}')")
+            log.info(f"[GoldTier] First 5 gold keys: {sample_keys}")
 
         return None
 

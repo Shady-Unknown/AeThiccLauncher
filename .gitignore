@@ -30,7 +30,6 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
-*.spec
 
 # Installer logs
 pip-log.txt
@@ -192,7 +191,6 @@ aethicc.paths.json
 # Segreti runtime utente (keychain/fallback): mai committare
 secrets.json
 .env
-API_Keys.txt
 aethicc-flatpak/repo
 aethicc-flatpak/.flatpak-builder
 aethicc-flatpak/build-dir
@@ -208,3 +206,4 @@ AeThiccLauncher_V1.5.0.7z
 # ffmpeg: distribuito compresso (bin/ffmpeg.zip), estratto al primo uso
 bin/ffmpeg.exe
 bin/ffmpeg.exe.tmp
+API_Keys.txt

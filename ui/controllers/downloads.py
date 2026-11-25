@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -37,7 +38,8 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -70,12 +72,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -101,6 +102,8 @@ from network.steam_build_worker import SteamBuildWorker
 from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
+
+log = logging.getLogger(__name__)
 
 # --- APP WINDOW PRINCIPALE ---
 
@@ -191,6 +194,7 @@ class DownloadsController:
                         if url:
                             return url
             except Exception:
+                # best-effort: a catalog lookup failure falls back to no URL
                 pass
         return ""
 
@@ -236,7 +240,7 @@ class DownloadsController:
             "total_bytes": int(meta.get("total_bytes") or 0),
             "created_at": time.time(),
         }
-        print(f"[App] Recovered partial download: {task['title']} ({size} bytes)")
+        log.info(f"[App] Recovered partial download: {task['title']} ({size} bytes)")
         self.dl_manager.add_to_queue(task, auto_start=False)
 
     def _on_pending_extraction_ready(self, archive_path, task_data):
@@ -301,11 +305,11 @@ class DownloadsController:
             key = normalize_dest_path(archive_path)
             handled_paths.add(key)
             if key in active_paths:
-                print(f"[App] Skip pending extraction: '{title}' is still downloading")
+                log.info(f"[App] Skip pending extraction: '{title}' is still downloading")
                 self.dl_manager.remove_pending_extraction(archive_path)
                 continue
             if self._archive_matches_installed(archive_path, title):
-                print(f"[App] Skip pending extraction: '{title}' is already installed")
+                log.info(f"[App] Skip pending extraction: '{title}' is already installed")
                 self.dl_manager.remove_pending_extraction(archive_path)
                 continue
             if key in dismissed:
@@ -404,7 +408,7 @@ class DownloadsController:
             self._add_recovered_partial(entry.get("archive_path"), entry, meta)
 
         self.dl_manager.set_pending_extractions(remaining)
-        print(
+        log.info(
             f"[App] Download recovery: {len(remaining)} pending extraction(s), "
             f"{len(incomplete_entries)} partial download(s)"
         )
@@ -462,7 +466,7 @@ class DownloadsController:
             )
 
         if is_supported:
-            print(f"[App] Hoster supportato ({domain}). Bypass del browser in corso!")
+            log.info(f"[App] Hoster supportato ({domain}). Bypass del browser in corso!")
 
             # --- ESTRAZIONE DATI RICCHI PER LA UI AL NEON ---
             game_title = self.current_game_data.get('title', 'Unknown Game')
@@ -546,7 +550,7 @@ class DownloadsController:
                 "provider_domain": domain,
             })
         else:
-            print(f"[App] Hoster sconosciuto. Apertura browser di fallback...")
+            log.info(f"[App] Hoster sconosciuto. Apertura browser di fallback...")
             self.scraper.open_download_link(url)
 
     def _on_download_resumed(self, downloaded_bytes, total_bytes):
@@ -593,7 +597,7 @@ class DownloadsController:
             self.show()
             self.activateWindow()
             
-        print(f"[App] Intercettato link! Cookie passati al Manager.")
+        log.info(f"[App] Intercettato link! Cookie passati al Manager.")
         
         # --- ESTRAZIONE DATI RICCHI PER LA NUOVA UI ---
         game_title = self.current_game_data.get('title', temp_dl_filename)

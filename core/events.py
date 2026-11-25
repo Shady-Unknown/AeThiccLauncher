@@ -12,11 +12,15 @@ code on a worker thread by accident.
 """
 from __future__ import annotations
 
+import logging
+
 import time
 import uuid
 from typing import Any, Callable
 
 from PyQt6.QtCore import QObject, pyqtSignal
+
+log = logging.getLogger(__name__)
 
 # --- Event names (keep in sync with plans/roadmap.md §14) -----------------
 EVENT_LAUNCHER_START = "launcher_start"
@@ -92,5 +96,5 @@ class EventBus(QObject):
             try:
                 callback(data)
             except Exception as exc:
-                print(f"[Events] subscriber error for '{name}': {exc}")
+                log.exception(f"[Events] subscriber error for '{name}': {exc}")
         return data

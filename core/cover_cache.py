@@ -1,11 +1,14 @@
+import logging
 import os
 import time
 import hashlib
-import requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from core.http_utils import fetch_image_bytes
 from core.paths import PathManager
 from core.config import get_base_dir
+
+log = logging.getLogger(__name__)
 
 
 STEAM_ASSETS_DIR_NAME = "Steam_Assets"
@@ -66,7 +69,7 @@ class CoverCache:
                 try:
                     resolved[idx] = fut.result()
                 except Exception as e:
-                    print(f"[CoverCache] cache worker error: {e}")
+                    log.exception(f"[CoverCache] cache worker error: {e}")
                     resolved[idx] = CoverCache.placeholder_url()
 
         # Ensure every slot is a valid file:// path; replace any remote URL with placeholder
@@ -79,6 +82,54 @@ class CoverCache:
     @staticmethod
     def resolve_single(url, title=None, installed_games=None):
         result = CoverCache.resolve_urls([url] if url else [], title, installed_games)
+        return result[0] if result else CoverCache.placeholder_url()
+
+    @staticmethod
+    def _cache_path_for(url):
+        ext = CoverCache._guess_ext(url)
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        cache_dir = PathManager.get_cache_dir() / COVERS_SUBDIR
+        return os.path.join(str(cache_dir), f"{url_hash}{ext}")
+
+    @staticmethod
+    def resolve_urls_cached(urls, title=None, installed_games=None):
+        """Non-blocking variant: only local files, never the network.
+
+        Missing images become the placeholder; callers resolve the real list in
+        a worker and update the UI when it is ready.
+        """
+        if not urls:
+            return [CoverCache.placeholder_url()] if isinstance(urls, list) else urls
+
+        if title and installed_games:
+            meta = installed_games.get(title)
+            if meta and meta.get("install_dir"):
+                assets_dir = os.path.join(meta["install_dir"], STEAM_ASSETS_DIR_NAME)
+                for fname in ("Cover.jpg", "Cover.png"):
+                    cover_path = os.path.join(assets_dir, fname)
+                    if os.path.isfile(cover_path):
+                        return [to_file_url(cover_path)]
+
+        resolved = []
+        for url in urls:
+            if not url:
+                continue
+            if url.startswith("file://"):
+                path = CoverCache._local_path_from_url(url)
+                resolved.append(to_file_url(path) if os.path.isfile(path)
+                                else CoverCache.placeholder_url())
+                continue
+            cached = CoverCache._cache_path_for(url)
+            if os.path.isfile(cached) and os.path.getsize(cached) > 0:
+                resolved.append(to_file_url(cached))
+            else:
+                resolved.append(CoverCache.placeholder_url())
+        return resolved or [CoverCache.placeholder_url()]
+
+    @staticmethod
+    def resolve_single_cached(url, title=None, installed_games=None):
+        result = CoverCache.resolve_urls_cached(
+            [url] if url else [], title, installed_games)
         return result[0] if result else CoverCache.placeholder_url()
 
     @staticmethod
@@ -106,7 +157,7 @@ class CoverCache:
                 fpath = os.path.join(str(covers_dir), fname)
                 if now - os.path.getmtime(fpath) > 86400:
                     try: os.remove(fpath)
-                    except: pass
+                    except OSError: pass
 
         return str(page_path)
 
@@ -145,10 +196,8 @@ class CoverCache:
         if not url or url.startswith("file://"):
             return url
 
-        ext = CoverCache._guess_ext(url)
-        url_hash = hashlib.md5(url.encode()).hexdigest()
-        cache_dir = PathManager.get_cache_dir() / COVERS_SUBDIR
-        cache_path = os.path.join(str(cache_dir), f"{url_hash}{ext}")
+        cache_path = CoverCache._cache_path_for(url)
+        cache_dir = os.path.dirname(cache_path)
 
         if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
             # Le immagini a un dato URL sono immutabili: cache permanente.
@@ -157,13 +206,13 @@ class CoverCache:
 
         os.makedirs(str(cache_dir), exist_ok=True)
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=5)
-            if r.status_code == 200 and r.content:
+            data = fetch_image_bytes(url, user_agent=USER_AGENT, timeout=5)
+            if data:
                 with open(cache_path, "wb") as f:
-                    f.write(r.content)
+                    f.write(data)
                 return to_file_url(cache_path)
         except Exception as e:
-            print(f"[CoverCache] Download failed for {url}: {e}")
+            log.exception(f"[CoverCache] Download failed for {url}: {e}")
 
         if not allow_placeholder:
             return ""
@@ -175,13 +224,13 @@ class CoverCache:
         ext = CoverCache._guess_ext(url)
         dest_path = os.path.join(dest_dir, f"{stem}{ext}")
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=5)
-            if r.status_code == 200:
+            data = fetch_image_bytes(url, user_agent=USER_AGENT, timeout=5)
+            if data:
                 with open(dest_path, "wb") as f:
-                    f.write(r.content)
+                    f.write(data)
                 return dest_path
         except Exception as e:
-            print(f"[CoverCache] Download to Steam_Assets failed for {url}: {e}")
+            log.exception(f"[CoverCache] Download to Steam_Assets failed for {url}: {e}")
         return None
 
     @staticmethod

@@ -1,10 +1,11 @@
 import unittest
 
-from PyQt6.QtCore import QCoreApplication
 
 from core.events import EVENT_SESSION_END, EventBus
 
-_app = QCoreApplication.instance() or QCoreApplication([])
+from tests.qt_app import ensure_app
+
+_app = ensure_app()
 
 
 class EventBusTests(unittest.TestCase):

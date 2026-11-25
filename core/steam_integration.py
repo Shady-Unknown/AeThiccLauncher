@@ -1,5 +1,6 @@
 # steam_integration.py
 import os
+import logging
 import sys
 import subprocess
 import vdf
@@ -8,14 +9,63 @@ import binascii
 import requests
 import re
 import shutil
+
+from core import steam_ids
 import time
 from PIL import Image
 import io
 from urllib.parse import quote
 
 from core import platform_info, secrets
+from core.atomic_io import atomic_write_bytes, atomic_write_text
+
+log = logging.getLogger(__name__)
 
 STEAM_CHILD_PROCS = ["steamwebhelper", "wineserver", "steam-runtime-supervisor", "reaper", "wine64", "wine64-preloader", "wine", "wine-preloader"]
+
+
+class SteamVdfError(RuntimeError):
+    """A Steam VDF write did not produce the expected result."""
+
+
+def _close_steam_for_vdf(restart_steam):
+    """Make sure Steam is closed before touching shortcuts/config VDFs.
+
+    With ``restart_steam`` the caller restarts Steam at the end (existing
+    behaviour). Without it, Steam may still be running: writing then would be
+    lost if Steam rewrites the file, so close it here and leave it closed. The
+    dialog text explains that the user can reopen Steam when ready.
+    """
+    if restart_steam:
+        kill_steam_safely()
+        return
+    if is_steam_running():
+        log.warning("[Steam] Steam is running: closing it to apply the VDF changes; it will stay closed.")
+        kill_steam_safely()
+
+
+def _read_shortcut_names(shortcuts_file):
+    try:
+        with open(shortcuts_file, 'rb') as f:
+            data = vdf.binary_loads(f.read())
+    except Exception as exc:
+        log.warning(f"[Steam] Cannot read shortcuts.vdf {shortcuts_file}: {exc}")
+        return set()
+    entries = (data.get('shortcuts', {}) or {}).values()
+    return {
+        str(entry.get('AppName', ''))
+        for entry in entries
+        if isinstance(entry, dict)
+    }
+
+
+def _verify_shortcut(shortcuts_file, game_title, present=True):
+    names = _read_shortcut_names(shortcuts_file)
+    ok = (game_title in names) if present else (game_title not in names)
+    if not ok:
+        state = "present" if present else "absent"
+        log.error(f"[Steam] Shortcut verification failed for '{game_title}': expected {state} in {shortcuts_file}")
+    return ok
 
 def _cleanup_steam_locks():
     """Remove stale Steam lock files that can block restart."""
@@ -35,8 +85,9 @@ def _cleanup_steam_locks():
                     continue
                 os.remove(path)
             except Exception:
+                # best-effort: temporary profile file; cleanup may race
                 try: os.remove(path)
-                except: pass
+                except OSError: pass
 
 _WIN_STEAM_PROCESSES = (
     "steam.exe",
@@ -103,6 +154,7 @@ def _kill_steam_children():
                 subprocess.run(["pkill", f"-{signal}", "-x", proc],
                                capture_output=True, timeout=5)
         except Exception:
+            # best-effort: optional Steam metadata/cleanup; never break the caller
             pass
 
     # Phase 1: graceful SIGTERM for Wine/Proton processes
@@ -131,7 +183,7 @@ def _restart_steam():
         else:
             subprocess.Popen([_steam_executable(), "-silent"], **popen_kwargs)
     except Exception as e:
-        print(f"[Steam] Errore durante il riavvio di Steam: {e}")
+        log.exception(f"[Steam] Errore durante il riavvio di Steam: {e}")
         return False
 
     for i in range(10):
@@ -139,14 +191,14 @@ def _restart_steam():
         if is_flatpak:
             res = subprocess.run(["flatpak-spawn", "--host", "pgrep", "-x", "steam"], capture_output=True)
             if res.returncode == 0:
-                print(f"[Steam] Steam avviato dopo {i * 0.5 + 0.5:.1f}s.")
+                log.info(f"[Steam] Steam avviato dopo {i * 0.5 + 0.5:.1f}s.")
                 return True
         else:
             for p in psutil.process_iter(['name']):
                 if _process_name(p) in ('steam', 'steam.exe', 'steam.sh'):
-                    print(f"[Steam] Steam avviato dopo {i * 0.5 + 0.5:.1f}s.")
+                    log.info(f"[Steam] Steam avviato dopo {i * 0.5 + 0.5:.1f}s.")
                     return True
-    print("[Steam] Steam non rilevato entro 5s dal riavvio.")
+    log.info("[Steam] Steam non rilevato entro 5s dal riavvio.")
     return False
 
 
@@ -198,12 +250,12 @@ def launch_shortcut(steam_id):
             )
             return True
         except Exception as exc:
-            print(f"[Steam] steam.exe non avviabile ({exc}), provo l'handler steam://")
+            log.exception(f"[Steam] steam.exe non avviabile ({exc}), provo l'handler steam://")
         try:
             os.startfile(url)
             return True
         except OSError as exc:
-            print(f"[Steam] Handler steam:// non disponibile: {exc}")
+            log.exception(f"[Steam] Handler steam:// non disponibile: {exc}")
             return False
 
     if platform_info.is_flatpak():
@@ -220,7 +272,7 @@ def launch_shortcut(steam_id):
         )
         return True
     except Exception as exc:
-        print(f"[Steam] Impossibile avviare Steam: {exc}")
+        log.exception(f"[Steam] Impossibile avviare Steam: {exc}")
         return False
 
 
@@ -238,6 +290,7 @@ def get_steam_localconfig_path(account_id):
                     steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
                     candidates.insert(0, os.path.join(steam_path, "userdata", str(account_id), "config", "localconfig.vdf"))
             except Exception:
+                # best-effort: optional Steam metadata/cleanup; never break the caller
                 pass
             candidates.insert(0, rf"C:\Program Files (x86)\Steam\userdata\{account_id}\config\localconfig.vdf")
         for p in candidates:
@@ -260,7 +313,7 @@ def kill_steam_safely():
     is_flatpak = platform_info.is_flatpak()
     
     if not is_steam_running():
-        print("[Steam] Steam è già chiuso. Pulisco processi residui e lock.")
+        log.info("[Steam] Steam è già chiuso. Pulisco processi residui e lock.")
         _kill_steam_children()
         _cleanup_steam_locks()
         return
@@ -275,11 +328,11 @@ def kill_steam_safely():
             subprocess.run(["steam", "-shutdown"], capture_output=True)
             subprocess.run(["flatpak", "run", "com.valvesoftware.Steam", "-shutdown"], capture_output=True)
     except Exception as e:
-        print(f"[Steam] Attenzione - Eseguibile non trovato durante lo spegnimento: {e}")
+        log.exception(f"[Steam] Attenzione - Eseguibile non trovato durante lo spegnimento: {e}")
         
     for i in range(20):
         if not is_steam_running():
-            print(f"[Steam] Processo morto dopo {i * 0.5:.1f}s.")
+            log.info(f"[Steam] Processo morto dopo {i * 0.5:.1f}s.")
             _kill_steam_children()
             _cleanup_steam_locks()
             time.sleep(1.0)
@@ -297,7 +350,7 @@ def kill_steam_safely():
             subprocess.run(["pkill", "-9", "-x", "steam"], capture_output=True)
             subprocess.run(["flatpak", "kill", "com.valvesoftware.Steam"], capture_output=True)
     except Exception as e:
-        print(f"[Steam] Attenzione - Eseguibile non trovato durante il killall: {e}")
+        log.exception(f"[Steam] Attenzione - Eseguibile non trovato durante il killall: {e}")
     
     _kill_steam_children()
     _cleanup_steam_locks()
@@ -326,6 +379,7 @@ def _get_steam_install_dir():
             except OSError:
                 continue
     except Exception:
+        # best-effort: optional Steam metadata/cleanup; never break the caller
         pass
 
     # Fallback su percorsi standard se il registro non è leggibile (es. avvio elevato).
@@ -342,12 +396,15 @@ def _get_steam_install_dir():
             return path
     return None
 
+def steam_install_dir():
+    """Public alias: the Windows Steam install folder, ``None`` elsewhere."""
+    return _get_steam_install_dir()
+
+
 def _steam_account_id_from_steamid64(steamid64):
     """Converte uno SteamID64 (es. 76561197988281094) nell'ID cartella userdata."""
-    try:
-        return str(int(steamid64) - 76561197960265728)
-    except (TypeError, ValueError):
-        return None
+    account_id = steam_ids.account_id_from_steamid64(steamid64)
+    return None if account_id is None else str(account_id)
 
 def _get_linux_steam_accounts():
     """Scansione account su Linux/Flatpak (comportamento storico, invariato)."""
@@ -377,7 +434,8 @@ def _get_linux_steam_accounts():
                                 match_avatar = re.search(r'"avatar"\s+"([^"]+)"', content, re.IGNORECASE)
                                 if match_avatar:
                                     avatar_hash = match_avatar.group(1)
-                        except:
+                        except (AttributeError, TypeError, ValueError):
+                            # best-effort: optional loginusers fields
                             pass
                             
                     accounts.append({
@@ -415,6 +473,7 @@ def _get_windows_steam_accounts():
                 if name:
                     persona_overrides[acc_id] = name
         except Exception:
+            # best-effort: optional Steam metadata/cleanup; never break the caller
             pass
 
     userdata_path = os.path.join(steam_dir, "userdata")
@@ -454,6 +513,7 @@ def _get_windows_steam_accounts():
                 if match_avatar:
                     avatar_hash = match_avatar.group(1)
             except Exception:
+                # best-effort: optional Steam metadata/cleanup; never break the caller
                 pass
 
         accounts.append({
@@ -494,6 +554,7 @@ def sync_steam_avatars(accounts):
     try:
         os.makedirs(media_dir, exist_ok=True)
     except Exception:
+        # best-effort: optional Steam metadata/cleanup; never break the caller
         pass
         
     current_account_ids = {str(acc['id']) for acc in accounts}
@@ -510,6 +571,7 @@ def sync_steam_avatars(accounts):
                 try:
                     os.remove(os.path.join(media_dir, f))
                 except Exception:
+                    # best-effort: optional Steam metadata/cleanup; never break the caller
                     pass
                     
     # Determina i percorsi locali per l'avatarcache
@@ -521,6 +583,7 @@ def sync_steam_avatars(accounts):
                 steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
                 avatarcache_paths.append(os.path.join(steam_path, "config", "avatarcache"))
         except Exception:
+            # best-effort: optional Steam metadata/cleanup; never break the caller
             pass
         avatarcache_paths.append(r"C:\Program Files (x86)\Steam\config\avatarcache")
     else:
@@ -561,7 +624,7 @@ def sync_steam_avatars(accounts):
             acc['local_avatar_path'] = local_path
         
         if not os.path.exists(local_path) and not os.path.exists(local_path_png):
-            steamid64 = int(acc['id']) + 76561197960265728
+            steamid64 = steam_ids.steamid64_from_account_id(acc['id'])
             copied_local = False
             
             for cache_dir in avatarcache_paths:
@@ -575,6 +638,7 @@ def sync_steam_avatars(accounts):
                         copied_local = True
                         break
                     except Exception:
+                        # best-effort: optional Steam metadata/cleanup; never break the caller
                         pass
                 elif os.path.exists(jpg_path):
                     try:
@@ -583,6 +647,7 @@ def sync_steam_avatars(accounts):
                         copied_local = True
                         break
                     except Exception:
+                        # best-effort: optional Steam metadata/cleanup; never break the caller
                         pass
                         
             # Se non l'abbiamo trovato in locale, scarichiamo (fallback)
@@ -639,7 +704,7 @@ def download_file(url, dest_path_no_ext, keep_alpha=False):
         return final_path
         
     except Exception as e:
-        print(f"[SteamGridDB] Errore: {e}")
+        log.exception(f"[SteamGridDB] Errore: {e}")
         return None
 
 def get_steam_account_paths():
@@ -695,8 +760,55 @@ def is_game_in_steam(game_title):
                     if v.get('AppName', '') == game_title:
                         return True
             except Exception:
+                # best-effort: optional Steam metadata/cleanup; never break the caller
                 pass
     return False
+
+def shortcut_records(account_paths=None, errors=None):
+    """Read every local shortcut once and return normalized records.
+
+    ``errors`` (when provided) receives ``(account_id, reason)`` entries for
+    VDFs that could not be read, so callers can distinguish "no shortcut" from
+    "unknown". The function is read-only and never writes Steam files.
+    """
+    records = []
+    paths = list(account_paths) if account_paths is not None else get_steam_account_paths()
+    for user_dir in paths:
+        account_id = os.path.basename(os.path.normpath(str(user_dir)))
+        if not account_id:
+            continue
+        shortcuts_file = os.path.join(str(user_dir), "config", "shortcuts.vdf")
+        if not os.path.exists(shortcuts_file):
+            continue
+        try:
+            with open(shortcuts_file, 'rb') as f:
+                data = vdf.binary_loads(f.read())
+        except Exception as exc:
+            if errors is not None:
+                errors.append((account_id, str(exc)))
+            log.warning("[Steam] Cannot read shortcuts.vdf for account %s: %s",
+                        account_id, exc)
+            continue
+        for index, entry in (data.get('shortcuts', {}) or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            grid_id = steam_ids.unsigned_appid(entry.get('appid', 0))
+            if grid_id is None:
+                continue
+            exe = str(entry.get('Exe') or '').strip().strip('"')
+            start_dir = str(entry.get('StartDir') or '').strip().strip('"')
+            records.append({
+                'account_id': account_id,
+                'index': str(index),
+                'appid': entry.get('appid'),
+                'grid_id': str(grid_id),
+                'shortcut_id': str((grid_id << 32) | 0x02000000),
+                'title': str(entry.get('AppName') or ''),
+                'exe': exe,
+                'start_dir': start_dir,
+            })
+    return records
+
 
 def find_shortcut_in_steam(game_title):
     """Cerca lo shortcut di ``game_title`` nei file shortcuts.vdf degli account.
@@ -726,6 +838,67 @@ def find_shortcut_in_steam(game_title):
     return None
 
 
+def shortcut_owner_accounts(game_title, shortcut_id="", grid_id=""):
+    """Return the local account ids whose ``shortcuts.vdf`` owns the game.
+
+    The account is resolved from the shortcut files rather than from stored
+    metadata, because ``steam_account_id`` can go stale (account removed,
+    shortcut recreated on another account, metadata cleaned). Matching tries
+    the 64-bit shortcut id first, then the 32-bit grid id, then the exact
+    display name. An empty list means the game is not a shortcut in any local
+    account.
+    """
+    title = str(game_title or "")
+    wanted_shortcut = str(shortcut_id or "").strip()
+    wanted_grid = str(grid_id or "").strip()
+
+    entries = []
+    for user_dir in get_steam_account_paths():
+        shortcuts_file = os.path.join(user_dir, "config", "shortcuts.vdf")
+        if not os.path.exists(shortcuts_file):
+            continue
+        try:
+            with open(shortcuts_file, 'rb') as f:
+                shortcuts = vdf.binary_loads(f.read())
+        except Exception:
+            continue
+        account_id = os.path.basename(os.path.normpath(user_dir))
+        if not account_id:
+            continue
+        for entry in (shortcuts.get('shortcuts', {}) or {}).values():
+            if isinstance(entry, dict):
+                entries.append((account_id, entry))
+
+    if not wanted_shortcut and not wanted_grid and not title:
+        return []
+
+    def _owners(predicate):
+        result = []
+        for account_id, entry in entries:
+            try:
+                if predicate(entry) and account_id not in result:
+                    result.append(account_id)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _grid(entry):
+        return int(entry.get('appid', 0)) & 0xFFFFFFFF
+
+    if wanted_shortcut:
+        owners = _owners(
+            lambda e: str((_grid(e) << 32) | 0x02000000) == wanted_shortcut)
+        if owners:
+            return owners
+    if wanted_grid:
+        owners = _owners(lambda e: str(_grid(e)) == wanted_grid)
+        if owners:
+            return owners
+    if title:
+        return _owners(lambda e: str(e.get('AppName', '')) == title)
+    return []
+
+
 def remove_from_steam(game_title, restart_steam=True):
     """
     Rimuove un gioco dai collegamenti Steam di tutti gli account locali.
@@ -738,12 +911,9 @@ def remove_from_steam(game_title, restart_steam=True):
     Returns:
         bool: True se il gioco è stato rimosso da almeno un account
     """
-    print(f"[Steam] Rimozione '{game_title}' dalle librerie Steam...")
+    log.info(f"[Steam] Rimozione '{game_title}' dalle librerie Steam...")
 
-    if restart_steam:
-        kill_steam_safely()
-    else:
-        print("[Steam] Kill saltato (l'utente riavvierà Steam manualmente).")
+    _close_steam_for_vdf(restart_steam)
 
     account_paths = get_steam_account_paths()
     found = False
@@ -768,8 +938,6 @@ def remove_from_steam(game_title, restart_steam=True):
             if not keys_to_del:
                 continue
 
-            found = True
-
             # Estrai gli ID prima della cancellazione per pulizia immagini e Proton
             clean_ids = []
             proton_ids = []
@@ -784,8 +952,11 @@ def remove_from_steam(game_title, restart_steam=True):
             # Backup e salvataggio VDF modificato
             shutil.copy(shortcuts_file, shortcuts_file + ".bak")
             shortcuts['shortcuts'] = shortcut_dict
-            with open(shortcuts_file, 'wb') as f:
-                f.write(vdf.binary_dumps(shortcuts))
+            atomic_write_bytes(shortcuts_file, vdf.binary_dumps(shortcuts))
+            if not _verify_shortcut(shortcuts_file, game_title, present=False):
+                log.error(f"[Steam] '{game_title}' is still present in {shortcuts_file}; not reporting success.")
+                continue
+            found = True
 
             # Pulizia immagini grid
             if os.path.exists(grid_folder):
@@ -797,6 +968,7 @@ def remove_from_steam(game_title, restart_steam=True):
                                 try:
                                     os.remove(old_file)
                                 except Exception:
+                                    # best-effort: optional Steam metadata/cleanup; never break the caller
                                     pass
 
             # Pulizia entry di compatibilità Proton
@@ -821,26 +993,25 @@ def remove_from_steam(game_title, restart_steam=True):
                             modified = True
 
                     if modified:
-                        with open(config_path, 'w', encoding='utf-8') as f:
-                            vdf.dump(data, f, pretty=True)
-                except Exception:
-                    pass
+                        atomic_write_text(config_path, vdf.dumps(data, pretty=True))
+                except Exception as exc:
+                    log.exception(f"[Steam] Proton cleanup failed for {config_path}: {exc}")
 
         except Exception as e:
-            print(f"[Steam] Errore durante la rimozione per account {os.path.basename(os.path.normpath(user_dir))}: {e}")
+            log.exception(f"[Steam] Errore durante la rimozione per account {os.path.basename(os.path.normpath(user_dir))}: {e}")
             continue
 
     if found:
-        print("[Steam] VDF modificato. Attesa scrittura su disco...")
+        log.info("[Steam] VDF modificato. Attesa scrittura su disco...")
         time.sleep(1.0)
 
         if restart_steam:
-            print("[Steam] Riavvio di Steam in background...")
+            log.info("[Steam] Riavvio di Steam in background...")
             _restart_steam()
         else:
-            print("[Steam] Riavvio automatico saltato. L'utente riavvierà Steam manualmente.")
+            log.info("[Steam] Steam è stato chiuso per applicare la rimozione; l'utente lo riaprirà manualmente.")
     else:
-        print(f"[Steam] '{game_title}' non trovato in nessun account Steam.")
+        log.info(f"[Steam] '{game_title}' non trovato in nessun account Steam.")
 
     return found
 
@@ -897,6 +1068,29 @@ def _find_proton():
 
     return "proton_experimental"
 
+def _write_proton_mapping(config_path, grid_id_str, shortcut_id_str, proton_name):
+    try:
+        shutil.copy(config_path, config_path + ".bak")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            data = vdf.load(f)
+
+        store = data.setdefault('InstallConfigStore', {})
+        software = store.setdefault('Software', {})
+        valve = software.setdefault('Valve', {})
+        steam = valve.setdefault('Steam', {})
+        mapping = steam.setdefault('CompatToolMapping', {})
+
+        proton_data = {"name": proton_name, "config": "", "priority": "250"}
+        mapping[grid_id_str] = proton_data
+        mapping[shortcut_id_str] = proton_data
+
+        atomic_write_text(config_path, vdf.dumps(data, pretty=True))
+        return True
+    except Exception as exc:
+        log.exception(f"[Steam] Proton mapping failed for {config_path}: {exc}")
+        return False
+
+
 def set_proton_compatibility(grid_id_str, shortcut_id_str):
     if sys.platform == 'win32':
         return True, "Native (Windows)"
@@ -908,39 +1102,23 @@ def set_proton_compatibility(grid_id_str, shortcut_id_str):
         os.path.expanduser("~/.var/app/com.valvesoftware.Steam/data/Steam/config/config.vdf")
     ]
 
+    found = False
     success = False
     for config_path in config_paths:
-        if os.path.exists(config_path):
-            try:
-                shutil.copy(config_path, config_path + ".bak")
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    data = vdf.load(f)
+        if not os.path.exists(config_path):
+            continue
+        found = True
+        if _write_proton_mapping(config_path, grid_id_str, shortcut_id_str, proton_name):
+            success = True
 
-                store = data.setdefault('InstallConfigStore', {})
-                software = store.setdefault('Software', {})
-                valve = software.setdefault('Valve', {})
-                steam = valve.setdefault('Steam', {})
-                mapping = steam.setdefault('CompatToolMapping', {})
-
-                proton_data = {"name": proton_name, "config": "", "priority": "250"}
-                mapping[grid_id_str] = proton_data
-                mapping[shortcut_id_str] = proton_data
-
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    vdf.dump(data, f, pretty=True)
-                success = True
-
-            except Exception: pass
-
+    if not found:
+        log.warning("[Steam] No config.vdf found; Proton mapping was not applied.")
     return success, proton_name
 
 # --- NOTA: ABBIAMO AGGIUNTO IL PARAMETRO selected_user_dir ---
 def add_game_to_steam(game_title, exe_path, install_dir, selected_user_dir, restart_steam=True):
-    print(f"[Steam] Inizio integrazione per '{game_title}'...")
-    if restart_steam:
-        kill_steam_safely()
-    else:
-        print("[Steam] Kill saltato (l'utente riavvierà Steam manualmente).")
+    log.info(f"[Steam] Inizio integrazione per '{game_title}'...")
+    _close_steam_for_vdf(restart_steam)
     
     assets_dir = os.path.join(install_dir, "Steam_Assets")
     os.makedirs(assets_dir, exist_ok=True)
@@ -969,7 +1147,9 @@ def add_game_to_steam(game_title, exe_path, install_dir, selected_user_dir, rest
             urls["hero"]  = get_asset_url("heroes")
             urls["logo"]  = get_asset_url("logos")
             urls["icon"]  = get_asset_url("icons")
-    except Exception: pass
+    except Exception:
+        # best-effort: optional Steam metadata/cleanup; never break the caller
+        pass
 
     appid_signed, grid_id_str, shortcut_id_str = get_steam_ids(exe_path, game_title)
     
@@ -985,7 +1165,7 @@ def add_game_to_steam(game_title, exe_path, install_dir, selected_user_dir, rest
             old_file = os.path.join(grid_folder, f"{grid_id_str}{suffix_del}{ext_del}")
             if os.path.exists(old_file):
                 try: os.remove(old_file)
-                except: pass
+                except OSError: pass
 
     shortcuts = {'shortcuts': {}}
     if os.path.exists(shortcuts_file):
@@ -1011,7 +1191,7 @@ def add_game_to_steam(game_title, exe_path, install_dir, selected_user_dir, rest
                 old_file = os.path.join(grid_folder, f"{clean_id}{suffix_del}{ext_del}")
                 if os.path.exists(old_file):
                     try: os.remove(old_file)
-                    except: pass
+                    except OSError: pass
         
     next_idx = str(max([int(k) for k in shortcut_dict.keys()] + [-1]) + 1)
     
@@ -1034,9 +1214,8 @@ def add_game_to_steam(game_title, exe_path, install_dir, selected_user_dir, rest
         'tags': {'0': 'SteamRIP'}
     }
     shortcuts['shortcuts'] = shortcut_dict
-    
-    with open(shortcuts_file, 'wb') as f:
-        f.write(vdf.binary_dumps(shortcuts))
+
+    atomic_write_bytes(shortcuts_file, vdf.binary_dumps(shortcuts))
         
     if urls["cover"]:
         local = download_file(urls["cover"], os.path.join(assets_dir, "Cover"), keep_alpha=False)
@@ -1058,19 +1237,24 @@ def add_game_to_steam(game_title, exe_path, install_dir, selected_user_dir, rest
         local = download_file(urls["icon"], os.path.join(assets_dir, "Icon"), keep_alpha=True)
         if local:
             shortcut_dict[next_idx]['icon'] = local
-            with open(shortcuts_file, 'wb') as f:
-                f.write(vdf.binary_dumps(shortcuts))
+            atomic_write_bytes(shortcuts_file, vdf.binary_dumps(shortcuts))
+
+    if not _verify_shortcut(shortcuts_file, game_title, present=True):
+        raise SteamVdfError(
+            f"The shortcut for '{game_title}' was not found after writing shortcuts.vdf. "
+            "Close Steam and try again."
+        )
 
     proton_success, proton_used = set_proton_compatibility(grid_id_str, shortcut_id_str)
 
-    print("[Steam] VDF write concluded. Waiting for disk flush.")
+    log.info("[Steam] VDF write concluded. Waiting for disk flush.")
     time.sleep(1.0)  
 
     if restart_steam:
-        print("[Steam] Riavvio di Steam in background per caricare il nuovo VDF...")
+        log.info("[Steam] Riavvio di Steam in background per caricare il nuovo VDF...")
         _restart_steam()
     else:
-        print("[Steam] Riavvio automatico saltato. L'utente riavvierà Steam manualmente.")
+        log.info("[Steam] Steam è stato chiuso per applicare lo shortcut; l'utente lo riaprirà manualmente.")
     
     # Restituiamo ENTRAMBI gli ID (64-bit per lanciare, 32-bit per la pagina libreria)
     # + l'ID dell'account Steam su cui è stato creato lo shortcut (per la sync del playtime)

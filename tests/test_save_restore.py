@@ -62,6 +62,15 @@ class RestoreTargetTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "not_absolute")
 
+    def test_parent_traversal_is_rejected(self):
+        root = os.path.join(os.path.expanduser("~"), "Documents")
+        target = os.path.join(root, "..", "outside", "Saves")
+        ok, reason = save_paths.check_restore_target(
+            target, allowed_roots=[root], protected=[root]
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "outside_allowed_roots")
+
 
 class RestoreTests(unittest.TestCase):
     def setUp(self):
@@ -122,6 +131,72 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(safety_info["reason"], "pre_restore")
         self.assertTrue((safety / "slot1.sav").is_file())
         self.assertEqual((safety / "slot1.sav").read_text(encoding="utf-8"), "state C")
+
+    def test_retention_does_not_remove_the_snapshot_being_restored(self):
+        first = self.snapshot("state A")
+        second = self.snapshot("state B")
+        self.manager.app_config['savegames']['keep_snapshots'] = 1
+        saves = self.staging / "My_Game" / "saves"
+        first_dir = saves / first
+        second_dir = saves / second
+        self.assertTrue(first_dir.is_dir())
+        # Make the live save genuinely different from the newest snapshot, so
+        # the pre_restore safety snapshot is new and retention really trims.
+        (self.destination / "slot1.sav").write_text("state C", encoding="utf-8")
+
+        result = self.manager.restore_snapshot(self.meta, first)
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(first_dir.is_dir())
+        self.assertEqual((self.destination / "slot1.sav").read_text(encoding="utf-8"),
+                         "state A")
+        # An unprotected snapshot was pruned, proving retention really ran.
+        self.assertFalse(second_dir.exists())
+        safety = saves / result["safety_snapshot"]
+        self.assertTrue(safety.is_dir())
+        self.assertTrue((safety / "slot1.sav").is_file())
+        info = json.loads((safety / "snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(info["reason"], "pre_restore")
+
+        manifest = json.loads(
+            (self.staging / "My_Game" / "savegames.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["latest_snapshot"],
+                         "saves/" + result["safety_snapshot"])
+        listed = {entry["id"] for entry in manifest["snapshots"]}
+        self.assertIn(first, listed)
+        self.assertIn(result["safety_snapshot"], listed)
+        self.assertNotIn(second, listed)
+
+    def test_single_file_restore_keeps_the_restored_snapshot(self):
+        # A file-kind restore creates its safety snapshot BEFORE copying the
+        # source, so retention must protect the source or the restore fails
+        # with copy_failed. This test fails if protected_snapshots is not passed.
+        file_dest = self.root / "Saves" / "profile.dat"
+        file_dest.write_text("state A", encoding="utf-8")
+        self.manager.get_source_save_path = mock.Mock(return_value=str(file_dest))
+        self.manager.app_config['savegames']['keep_snapshots'] = 2
+
+        def snap(content):
+            file_dest.write_text(content, encoding="utf-8")
+            created = self.manager.create_snapshot(
+                str(self.staging / "My_Game"), "My Game", self.meta,
+                str(file_dest), reason="sync",
+            )
+            self.assertTrue(created["created"], created)
+            return Path(created["snapshot"]).name
+
+        first = snap("state A")
+        snap("state B")
+        file_dest.write_text("state C", encoding="utf-8")
+
+        result = self.manager.restore_snapshot(self.meta, first)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(file_dest.read_text(encoding="utf-8"), "state A")
+        first_dir = self.staging / "My_Game" / "saves" / first
+        self.assertTrue(first_dir.is_dir())
+        self.assertTrue((first_dir / "profile.dat").is_file())
 
     def test_snapshot_metadata_is_not_restored(self):
         first = self.snapshot("state A")
@@ -232,8 +307,9 @@ class BackupServiceTests(unittest.TestCase):
 
     def test_backup_state_snapshots_and_pushes(self):
         savegames = mock.Mock()
-        savegames.push_mirror.return_value = {
-            "configured": True, "copied": 2, "skipped": 0, "errors": []
+        savegames.try_push_mirror.return_value = {
+            "status": "completed",
+            "report": {"configured": True, "copied": 2, "skipped": 0, "errors": []},
         }
         state = mock.Mock()
         state.snapshot.return_value = Path("/tmp/20260101_120000")
@@ -244,7 +320,9 @@ class BackupServiceTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["snapshot"], "20260101_120000")
-        savegames.push_mirror.assert_called_once_with()
+        savegames.try_push_mirror.assert_called_once_with(timeout_ms=0)
+        self.assertEqual(result["mirror"]["copied"], 2)
+        self.assertEqual(result["mirror"]["status"], "completed")
 
     def test_backup_state_without_manager(self):
         service = BackupService(mock.Mock())

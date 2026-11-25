@@ -9,6 +9,7 @@ Arricchimento IGDB on-demand per la Discovery.
 
 Pensato per girare su poche decine di titoli visibili alla volta.
 """
+import logging
 import json
 import os
 import re
@@ -17,8 +18,11 @@ import time
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core import titles
 from core.paths import PathManager
 from network.igdb_worker import IGDB_BASE, UA, IGDBWorker
+
+log = logging.getLogger(__name__)
 
 TAXONOMY_FILENAME = "igdb_taxonomy.json"
 TAXONOMY_TTL = 30 * 24 * 3600
@@ -28,10 +32,7 @@ REQUEST_DELAY = 0.3
 
 
 def _clean_title(text):
-    text = re.sub(r'(?i)(game of the year|complete edition|ultimate edition|'
-                  r"director\'s cut|deluxe edition|sunset edition|digital edition|"
-                  r'gold edition|standard edition)', '', text or '')
-    return re.sub(r'[^a-z0-9]', '', text.lower())
+    return titles.normalize_title(text)
 
 
 def _guess_appid(title):
@@ -89,7 +90,7 @@ def _fetch_taxonomy(headers):
                           headers=headers, data=f"fields id,name; limit 100;", timeout=15)
         if r.status_code != 200:
             return {}
-        return {int(item["id"]): item["name"] for item in (r.json() or []) if item.get("id")}
+        return {str(int(item["id"])): item["name"] for item in (r.json() or []) if item.get("id")}
 
     data = {
         "fetched_at": time.time(),
@@ -101,7 +102,7 @@ def _fetch_taxonomy(headers):
         with open(_taxonomy_path(), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
     except Exception as e:
-        print(f"[IGDBMeta] taxonomy save error: {e}")
+        log.exception(f"[IGDBMeta] taxonomy save error: {e}")
     return data
 
 
@@ -110,6 +111,26 @@ def _cover_url(raw):
     if url.startswith("//"):
         url = "https:" + url
     return url.replace("t_thumb", "t_cover_big")
+
+
+def taxonomy_names(taxonomy, kind, ids):
+    """Resolve IGDB taxonomy ids to labels.
+
+    A freshly fetched taxonomy used to keep int keys while the lookups used
+    strings, so the first run after the 30-day refresh showed numeric genres
+    and themes until the next launch. Accept both key types and fall back to
+    the id itself when a label is missing.
+    """
+    names = (taxonomy or {}).get(kind) or {}
+    if not isinstance(names, dict):
+        names = {}
+    labels = []
+    for value in ids or []:
+        name = names.get(str(value))
+        if name is None:
+            name = names.get(value)
+        labels.append(str(name) if name is not None else str(value))
+    return labels
 
 
 class IGDBMetaWorker(QThread):
@@ -171,7 +192,7 @@ class IGDBMetaWorker(QThread):
             try:
                 r = requests.post(f"{IGDB_BASE}/games", headers=headers, data=body, timeout=15)
                 if r.status_code != 200:
-                    print(f"[IGDBMeta] query status {r.status_code}")
+                    log.info(f"[IGDBMeta] query status {r.status_code}")
                     continue
                 for game in r.json() or []:
                     matched_appid = None
@@ -190,19 +211,19 @@ class IGDBMetaWorker(QThread):
                     results[title] = {
                         "igdb_id": game.get("id"),
                         "steam_appid": matched_appid or "",
-                        "genres": [taxonomy["genres"].get(str(g), str(g)) for g in genres],
+                        "genres": taxonomy_names(taxonomy, "genres", genres),
                         "genre_ids": genres,
-                        "themes": [taxonomy["themes"].get(str(t), str(t)) for t in themes],
+                        "themes": taxonomy_names(taxonomy, "themes", themes),
                         "theme_ids": themes,
-                        "modes": [taxonomy["modes"].get(str(m), str(m)) for m in modes],
+                        "modes": taxonomy_names(taxonomy, "modes", modes),
                         "mode_ids": modes,
                         "rating": round(game.get("total_rating") or 0, 1),
                         "release_year": time.gmtime(release).tm_year if release else 0,
                         "cover_url": _cover_url(game.get("cover")),
                     }
             except Exception as e:
-                print(f"[IGDBMeta] batch error: {e}")
+                log.exception(f"[IGDBMeta] batch error: {e}")
             time.sleep(REQUEST_DELAY)
 
-        print(f"[IGDBMeta] enriched {len(results)}/{len(self._jobs)} titles")
+        log.info(f"[IGDBMeta] enriched {len(results)}/{len(self._jobs)} titles")
         self.meta_ready.emit(results)

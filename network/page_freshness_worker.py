@@ -1,14 +1,17 @@
 # page_freshness_worker.py
 from PyQt6.QtCore import QThread, pyqtSignal
+import logging
 
 from network.resolver import check_page_freshness, fetch_page_headers
 from core.version_status import parse_version_status_html
+
+log = logging.getLogger(__name__)
 
 
 class PageFreshnessWorker(QThread):
     """HEAD condizionale (ETag/Last-Modified) fuori dal thread UI."""
 
-    checked = pyqtSignal(str, bool)  # url, is_fresh
+    checked = pyqtSignal(str, object)  # url, True | False | None (unknown)
 
     def __init__(self, url, etag="", last_modified="", parent=None):
         super().__init__(parent)
@@ -17,11 +20,11 @@ class PageFreshnessWorker(QThread):
         self.last_modified = last_modified or ""
 
     def run(self):
+        fresh = None
         try:
             fresh = check_page_freshness(self.url, self.etag, self.last_modified)
         except Exception as e:
-            print(f"[Freshness] check failed for {self.url}: {e}")
-            fresh = True  # graceful degradation, come prima
+            log.exception(f"[Freshness] check failed for {self.url}: {e}")
         self.checked.emit(self.url, fresh)
 
 
@@ -63,5 +66,5 @@ class VersionStatusWorker(QThread):
             if response.status_code == 200 and response.text:
                 status = parse_version_status_html(response.text) or {}
         except Exception as e:
-            print(f"[VersionStatus] backfill failed for {self.url}: {e}")
+            log.exception(f"[VersionStatus] backfill failed for {self.url}: {e}")
         self.status_ready.emit(self.title, self.url, status)

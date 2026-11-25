@@ -1,7 +1,12 @@
 # style_settings.py
 import json
+import logging
 import os
 import sys
+
+from core.atomic_io import atomic_write_json, preserve_corrupt_file
+
+log = logging.getLogger(__name__)
 
 CONFIG_FILE = "config.json"
 
@@ -71,6 +76,7 @@ DEFAULT_CONFIG = {
         "sync_interval": 30,
         "sync_unit": "minutes",
         "keep_snapshots": 5,
+        "snapshot_hash": False,
         "include_launcher_state": True
     },
     "auto_extract": False,
@@ -142,7 +148,8 @@ def load_config():
                 # Merge ricorsivo: i default nuovi restano, le scelte utente vincono.
                 config = _deep_merge(config, user_config)
         except Exception as e:
-            print(f"[Config] Error loading {source_path}: {e}")
+            preserved = preserve_corrupt_file(source_path)
+            log.exception(f"[Config] Error loading {source_path}: {e} (preserved at {preserved})")
 
     # --- MIGRAZIONE TEMI: normalizza il registro "themes" ---
     user_had_themes = isinstance(user_config.get("themes"), dict) and user_config["themes"] if 'user_config' in locals() else False
@@ -166,23 +173,23 @@ def load_config():
     return config
 
 def save_config(config_data):
-    # --- ONBOARDING PROTECTION ---
-    # We DO NOT create the file on disk if the user hasn't added at least one watched folder.
-    # This ensures the Onboarding Dialog will appear again on next launch if they skipped it.
-    if not config_data.get("watched_folders"):
-        print("[Config] Nessuna cartella monitorata. Salvataggio su disco annullato per permettere l'onboarding.")
-        return
+    """Persist the configuration.
 
+    Every change is written, including a config with no libraries: the
+    onboarding wizard is gated by the ``onboarding.completed`` marker (see
+    ``main._needs_onboarding``), not by refusing to save the file.
+    """
     # Allineiamo il salvataggio al caricamento, usando PathManager
     from core.paths import PathManager
     config_dir = PathManager.get_config_dir()
     try:
         config_dir.mkdir(parents=True, exist_ok=True)
         config_path = str(config_dir / CONFIG_FILE)
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=4)
+        atomic_write_json(config_path, config_data, indent=4, fsync=True)
     except Exception as e:
-        print(f"Error saving config: {e}")
+        log.exception(f"Error saving config: {e}")
+        return False
+    return True
 
 def get_stylesheet(theme_data):
     main_bg = theme_data.get('main_background_color', theme_data.get('background_dark_purple', '#1a0f2b'))

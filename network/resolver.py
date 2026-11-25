@@ -1,9 +1,12 @@
 # resolver.py
 import re
+import logging
 import hashlib
 import time
 from curl_cffi import requests
 from urllib.parse import urlparse, urljoin
+
+log = logging.getLogger(__name__)
 
 MAX_RESOLVE_RETRIES = 3
 
@@ -45,9 +48,15 @@ def fetch_page_headers(url):
         return ('', '')
 
 def check_page_freshness(url, etag=None, last_modified=None):
-    """HEAD condizionale: True se la pagina non è cambiata (304 o headers identici)."""
+    """HEAD condizionale.
+
+    Returns ``True`` when the page is unchanged (304 or identical validators),
+    ``False`` when it changed, and ``None`` when the check failed (network
+    error). Callers must not treat ``None`` as "fresh": that is what made
+    stale pages survive a flaky connection.
+    """
     if not etag and not last_modified:
-        return True  # niente da confrontare → trattiamo come fresca
+        return True  # niente da confrontare
     try:
         h = {'User-Agent': _FRESHNESS_UA, 'Accept': '*/*'}
         if etag:
@@ -68,7 +77,7 @@ def check_page_freshness(url, etag=None, last_modified=None):
             return True
         return False
     except Exception:
-        return True  # errore di rete → trattiamo come fresca (graceful degradation)
+        return None  # errore di rete: stato sconosciuto, non "fresh"
 
 HOSTER_RESOLVERS = {
     'buzzheavier.com':  '_resolve_buzzheavier',
@@ -131,7 +140,7 @@ class LinkResolver:
                  
         if is_cf:
             if self.cf_callback:
-                print(f"[Resolver] Cloudflare bloccante su {url}. Invoco il browser fantasma PyQt...")
+                log.info(f"[Resolver] Cloudflare bloccante su {url}. Invoco il browser fantasma PyQt...")
                 html, cookies = self.cf_callback(url)
                 self.session_cookies.update(cookies) # Salviamo i cookie di salvezza
                 
@@ -170,6 +179,7 @@ class LinkResolver:
         try:
             self.session_cookies.update(r.cookies.get_dict())
         except Exception:
+            # best-effort: cookie capture is best-effort
             pass
 
         ct = (r.headers.get('content-type') or '').lower()
@@ -193,7 +203,7 @@ class LinkResolver:
         return bytes(buf).decode('utf-8', 'replace')
 
     def _resolve_megadb(self, url: str) -> tuple[str, dict]:
-        print(f"[Resolver] Risoluzione MegaDB in corso per: {url}")
+        log.info(f"[Resolver] Risoluzione MegaDB in corso per: {url}")
 
         # Already a CDN link: never GET a multi-GB file into memory.
         path_lower = urlparse(url).path.lower()
@@ -202,7 +212,7 @@ class LinkResolver:
             or 'download_token=' in url
             or re.search(r'\.(?:rar|zip|7z|iso|part\d+)$', path_lower)
         ):
-            print("[MegaDB] L'URL è già un link CDN diretto. Lo passo al downloader!")
+            log.info("[MegaDB] L'URL è già un link CDN diretto. Lo passo al downloader!")
             return url, self.session_cookies
 
         # MegaDB enforces a Referer allowlist: SteamRip content accepts steamrip.com.
@@ -210,14 +220,14 @@ class LinkResolver:
 
         text = self._get_page_text(url, timeout=30, extra_headers={'Referer': referer})
         if text is None:
-            print("[MegaDB] La pagina ha risposto con un file: uso l'URL così com'è.")
+            log.info("[MegaDB] La pagina ha risposto con un file: uso l'URL così com'è.")
             return url, self.session_cookies
 
         # Legacy flow: direct href to /d/.
         match = re.search(r'href="(https?://[a-zA-Z0-9-]+\.megadb\.[a-z]+(?::\d+)?/d/[^"]+)"', text)
         if match:
             direct_url = match.group(1)
-            print(f"[MegaDB] Link CDN trovato: {direct_url}")
+            log.info(f"[MegaDB] Link CDN trovato: {direct_url}")
             return direct_url, self.session_cookies
 
         # New 2026 flow: finalDownloadUrl + countdown, then the CDN redirect.
@@ -228,14 +238,14 @@ class LinkResolver:
                 if attempt:
                     # The previous token has been burnt: reload the page to get
                     # a fresh one (and the updated session cookie).
-                    print("[MegaDB] Token non armato, ricarico la pagina e riprovo...")
+                    log.info("[MegaDB] Token non armato, ricarico la pagina e riprovo...")
                     text = self._get_page_text(url, timeout=30, extra_headers={'Referer': referer})
                     token_url = self._extract_megadb_token_url(text or '')
                     if not token_url:
                         break
                 try:
                     direct_url = self._follow_megadb_token(token_url, referer)
-                    print(f"[MegaDB] Link CDN risolto: {direct_url}")
+                    log.info(f"[MegaDB] Link CDN risolto: {direct_url}")
                     return direct_url, self.session_cookies
                 except Exception as exc:
                     last_error = exc
@@ -278,6 +288,7 @@ class LinkResolver:
         try:
             self.session_cookies.update(r.cookies.get_dict())
         except Exception:
+            # best-effort: cookie capture is best-effort
             pass
 
         if r.status_code in (301, 302, 303, 307, 308):
@@ -450,7 +461,7 @@ class LinkResolver:
                 raise Exception(f"Gofile API error: non-JSON response. HTTP {api_r.status_code}")
             status = data.get('status')
             if status in ('error-rateLimit', 'error-token', 'error-wrongToken'):
-                print(f"[GoFile] {status}: rinnovo token guest e riprovo...")
+                log.info(f"[GoFile] {status}: rinnovo token guest e riprovo...")
                 token = self._reset_gofile_token()
                 continue
             break
@@ -476,7 +487,7 @@ class LinkResolver:
         links = self._collect_gofile_links(content_id, token, data or {})
 
         if links:
-            print(f"[GoFile] Link diretto trovato ({len(links)} file).")
+            log.info(f"[GoFile] Link diretto trovato ({len(links)} file).")
             self.session_cookies['accountToken'] = token
             return links[0], self.session_cookies
 
@@ -538,7 +549,7 @@ class LinkResolver:
         raise Exception(f"Buzzheavier: risposta inattesa {dl_r.status_code}, hx-redirect assente")
 
     def _resolve_qiwi(self, url: str) -> tuple[str, dict]:
-        print(f"[Resolver] Risoluzione Qiwi in corso per: {url}")
+        log.info(f"[Resolver] Risoluzione Qiwi in corso per: {url}")
         page_r = self._get_with_cf(url, timeout=30)
         
         match = re.search(r'href=["\'](https?://[^"\']*\.qiwi\.gg/download/[^"\']+)["\']', page_r.text)
@@ -549,7 +560,7 @@ class LinkResolver:
             dl_link = match.group(1)
             if dl_link.startswith('/'):
                 dl_link = "https://qiwi.gg" + dl_link
-            print(f"[Qiwi] Link di redirect CDN trovato: {dl_link}")
+            log.info(f"[Qiwi] Link di redirect CDN trovato: {dl_link}")
             return dl_link, self.session_cookies
             
         raise Exception(f"Qiwi Resolver Error: Link non trovato.")
@@ -559,50 +570,3 @@ class LinkResolver:
         if not match:
             raise Exception(f"Pixeldrain: impossibile estrarre file_id da {url}")
         return f"https://pixeldrain.com/api/file/{match.group(1)}?download", self.session_cookies
-
-
-# --- Page freshness helpers (portati da main: usati da page_freshness_worker) ---
-_FRESHNESS_UA = (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-    'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/148.0.0.0 Safari/537.36'
-)
-
-
-def fetch_page_headers(url):
-    """Lightweight HEAD request per ottenere ETag / Last-Modified di una pagina SteamRip."""
-    try:
-        r = requests.head(
-            url, headers={'User-Agent': _FRESHNESS_UA, 'Accept': '*/*'},
-            impersonate="chrome120", timeout=5, allow_redirects=True
-        )
-        return (r.headers.get('ETag', ''), r.headers.get('Last-Modified', ''))
-    except Exception:
-        return ('', '')
-
-
-def check_page_freshness(url, etag=None, last_modified=None):
-    """HEAD condizionale: True se la pagina non è cambiata (304 o headers identici)."""
-    if not etag and not last_modified:
-        return True
-    try:
-        h = {'User-Agent': _FRESHNESS_UA, 'Accept': '*/*'}
-        if etag:
-            h['If-None-Match'] = etag
-        if last_modified:
-            h['If-Modified-Since'] = last_modified
-        r = requests.head(
-            url, headers=h, impersonate="chrome120",
-            timeout=5, allow_redirects=True
-        )
-        if r.status_code == 304:
-            return True
-        new_etag = r.headers.get('ETag', '')
-        new_lm = r.headers.get('Last-Modified', '')
-        if etag and new_etag and etag == new_etag:
-            return True
-        if last_modified and new_lm and last_modified == new_lm:
-            return True
-        return False
-    except Exception:
-        return True

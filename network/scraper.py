@@ -1,11 +1,15 @@
+import logging
 import re
 import random
-from bs4 import BeautifulSoup
-from core.meta_utils import strip_title
-from core.version_status import parse_version_status_html
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QUrl
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEngineHttpRequest
 from network.browser_stealth import PersistentWebView, StealthWebPage, AdBlockInterceptor
+from network.scrape_queue import ScrapeQueue
+from network.steamrip_parse import (
+    parse_catalog_html, parse_cover_html, parse_game_page_html,
+)
+
+log = logging.getLogger(__name__)
 
 class SteamRIPScraper(QObject):
     extract_started = pyqtSignal(str)  
@@ -45,53 +49,159 @@ class SteamRIPScraper(QObject):
         self.timer.timeout.connect(self._check_dom_state)
         
         self.current_mode = None
+        self.current_job = None
+        self._interactive = False
+        self.queue = ScrapeQueue()
         self.timeout_counter = 0
-        self._active_sgdb_workers = []
+
+    def shutdown(self):
+        """Stop the hidden WebEngine view before the application quits.
+
+        The view is a top-level widget (it has no Qt parent), so closing the
+        main window does not destroy it on its own.
+        """
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+        timer = getattr(self, "timer", None)
+        if timer is not None:
+            timer.stop()
+        self._shutting_down = True
+        queue = getattr(self, "queue", None)
+        if queue is not None:
+            queue.clear()
+        self.current_job = None
+        self.current_mode = None
+        self._interactive = False
+        try:
+            self.profile.downloadRequested.disconnect(self._handle_download_request)
+        except (TypeError, RuntimeError):
+            pass
+        clear_interceptor = getattr(self.profile, "setUrlRequestInterceptor", None)
+        if clear_interceptor is not None:
+            try:
+                clear_interceptor(None)
+            except (TypeError, RuntimeError):
+                pass
+        browser = getattr(self, "browser", None)
+        page = getattr(self, "page", None)
+        self.browser = None
+        self.page = None
+        if browser is not None:
+            try:
+                browser.stop()
+                browser.setPage(None)
+                browser.force_close = True
+                browser.close()
+                browser.deleteLater()
+            except RuntimeError:
+                pass
+        if page is not None:
+            try:
+                page.deleteLater()
+            except RuntimeError:
+                pass
+
+    def _enqueue_job(self, mode, url="", title="", priority=0):
+        if getattr(self, "_shutting_down", False):
+            return None
+        current = self.current_job
+        if current is not None and (
+                current.mode, current.url, current.title) == (
+                str(mode), str(url or ""), str(title or "")):
+            return None
+        job = self.queue.enqueue(mode, url=url, title=title, priority=priority)
+        if job is not None:
+            self._start_next_job()
+        return job
+
+    def _start_next_job(self):
+        if getattr(self, "_shutting_down", False):
+            return
+        if self.current_job is not None or getattr(self, "_interactive", False):
+            return
+        job = self.queue.pop_next()
+        if job is None:
+            return
+        self.current_job = job
+        self.current_mode = job.mode
+        self.target_url = job.url
+        self.timeout_counter = 0
+        self.browser.move(-10000, -10000)
+        self.browser.hide()
+        if job.mode == "catalog":
+            self.browser.load(QUrl("https://steamrip.com/games-list-page/"))
+        else:
+            self.browser.load(QUrl(job.url))
+        self.timer.start(500)
+        if job.mode == "extract":
+            self.extract_started.emit(job.url)
+
+    def _finish_job(self, emit_timeout=False):
+        job = self.current_job
+        if job is None:
+            return
+        self.timer.stop()
+        self.browser.hide()
+        self.current_job = None
+        self.current_mode = None
+        self.target_url = ""
+        if emit_timeout:
+            if job.mode == "silent_update":
+                self.silent_update_ready.emit({}, job.title)
+            elif job.mode == "cover":
+                self.cover_fetched.emit(job.title, "")
+            elif job.mode == "catalog":
+                self.error_occurred.emit("Timeout while loading the catalog.")
+            else:
+                self.error_occurred.emit("Timeout during data processing.")
+        self._start_next_job()
+
+    def _complete_job(self):
+        self._finish_job()
+
+    def _interactive_preempt(self, mode):
+        """User-visible browser action: background jobs yield immediately.
+
+        Search resumes the queue when a result is opened; the download browser
+        has no reliable close signal, so it drops pending work instead of
+        leaving the queue stuck forever.
+        """
+        self._interactive = True
+        if mode == "download":
+            self.queue.clear()
+        job = self.current_job
+        if job is not None:
+            self.timer.stop()
+            self.current_job = None
+            self.current_mode = None
+            self.target_url = ""
+        self.current_mode = mode
+
+    def resume_background(self):
+        """Leave an interactive browser mode and resume the queue."""
+        self._interactive = False
+        self.current_mode = None
+        self._start_next_job()
 
     def solve_cloudflare(self, url):
         """Metodo chiamato dalla GUI per risolvere URL ostici usando il browser nativo."""
-        self.timer.stop()
-        self.current_mode = "cf_bypass"
-        self.timeout_counter = 0
-        self.target_url = url
-        self.browser.move(-10000, -10000)
-        self.browser.hide()
-        self.browser.load(QUrl(url))
-        self.timer.start(500)
+        self._enqueue_job("cf_bypass", url=url, priority=10)
 
     def fetch_master_catalog(self):
-        print("[Scraper] Fetching Master Catalog...")
+        log.info("[Scraper] Fetching Master Catalog...")
         delay = random.randint(500, 2000)
-        QTimer.singleShot(delay, lambda: self._start_fetch_sequence())
-
-    def _start_fetch_sequence(self):
-        """Metodo privato che esegue effettivamente il fetch."""    
-        self.timer.stop()
-        self.current_mode = "catalog"
-        self.timeout_counter = 0
-        self.target_url = "https://steamrip.com/games-list-page"
-        self.browser.move(-10000, -10000)
-        self.browser.hide()
-        self.browser.load(QUrl("https://steamrip.com/games-list-page/"))
-        self.timer.start(500)
+        QTimer.singleShot(
+            delay, lambda: self._enqueue_job("catalog", url="https://steamrip.com/games-list-page/"))
 
     def check_update_silently(self, url_string, game_title):
-        print(f"[Scraper] Silent check: {game_title}")
-        self.timer.stop()
-        self.current_mode = "silent_update"
-        self.current_silent_title = game_title
-        self.timeout_counter = 0
-        self.target_url = url_string
-        self.browser.move(-10000, -10000)
-        self.browser.hide()
-        self.browser.load(QUrl(url_string))
-        self.timer.start(500)
+        log.info(f"[Scraper] Silent check: {game_title}")
+        self._enqueue_job("silent_update", url=url_string, title=game_title)
 
     def search_game(self, query):
-        self.timer.stop()
-        self.current_mode = "search"
+        self._interactive_preempt("search")
         self.browser.setWindowTitle("SteamRIP - Search")
-        self.browser.move(100, 100) 
+        self.browser.move(100, 100)
         self.browser.show()
         self.browser.raise_()
         self.browser.activateWindow()
@@ -99,36 +209,20 @@ class SteamRIPScraper(QObject):
         self.browser.load(url)
 
     def extract_game(self, url_string):
-        self.timer.stop()
-        self.current_mode = "extract"
-        self.timeout_counter = 0
-        self.target_url = url_string
-        self.browser.move(-10000, -10000)
-        self.browser.hide()
-        self.browser.load(QUrl(url_string))
-        self.timer.start(500)
+        self._enqueue_job("extract", url=url_string)
 
     def fetch_cover(self, game_title, url_string):
         """Lightweight mode: load a game page and extract only the featured cover image."""
-        self.timer.stop()
-        self.current_mode = "cover"
-        self.current_cover_title = game_title
-        self.timeout_counter = 0
-        self.target_url = url_string
-        self.browser.move(-10000, -10000)
-        self.browser.hide()
-        self.browser.load(QUrl(url_string))
-        self.timer.start(500)
+        self._enqueue_job("cover", url=url_string, title=game_title)
 
     def open_download_link(self, url_string):
-        self.timer.stop()
-        self.current_mode = "download" 
+        self._interactive_preempt("download")
         self.browser.setWindowTitle("Bowser the Browser - Bypass Gate")
-        self.browser.move(100, 100) 
+        self.browser.move(100, 100)
         self.browser.show()
         self.browser.raise_()
         self.browser.activateWindow()
-        
+
         req = QWebEngineHttpRequest(QUrl(url_string))
         req.setHeader(b"Referer", b"https://steamrip.com/")
         self.browser.load(req)
@@ -137,16 +231,17 @@ class SteamRIPScraper(QObject):
         url_str = qurl.toString()
         if self.current_mode == "search" and url_str != "about:blank":
             if "?s=" not in url_str and url_str != "https://steamrip.com/":
-                self.current_mode = "extract"
-                self.timeout_counter = 0
-                self.target_url = url_str
                 self.browser.hide()
-                self.browser.move(-10000, -10000) 
-                self.extract_started.emit(url_str)
-                self.timer.start(1000)
+                self.browser.move(-10000, -10000)
+                self._interactive = False
+                self.current_mode = None
+                self._enqueue_job("extract", url=url_str, priority=5)
     
     def _handle_download_request(self, download_item):
         self.download_requested_signal.emit(download_item)
+        if self.current_mode == "download":
+            self.browser.hide()
+            self.resume_background()
 
     def _on_load_finished(self, ok):
         if ok and self.current_mode == "download":
@@ -182,7 +277,7 @@ class SteamRIPScraper(QObject):
         # === 1. GESTIONE DEDICATA AL BYPASS CLOUDFLARE INVISIBILE ===
         if self.current_mode == "cf_bypass":
             if self.timeout_counter >= 16 and not self.browser.isVisible():
-                print("[Scraper] ⚠️ Turnstile necessita di interazione manuale. Mostro il browser...")
+                log.info("[Scraper] ⚠️ Turnstile necessita di interazione manuale. Mostro il browser...")
                 self.browser.setWindowTitle("Risoluzione Cloudflare in corso...")
                 self.browser.resize(800, 600)
                 self.browser.showNormal()
@@ -201,7 +296,7 @@ class SteamRIPScraper(QObject):
 
         # === TIMEOUT NORMALI PER ESTRAZIONE E CATALOGO ===
         if self.timeout_counter == 12:
-            print("[Scraper] ⚠️ Possible Cloudflare block! Showing browser for manual bypass...")
+            log.info("[Scraper] ⚠️ Possible Cloudflare block! Showing browser for manual bypass...")
             self.browser.setWindowTitle("SteamRIP - Cloudflare Bypass")
             self.browser.resize(800, 600)
             self.browser.move(100, 100) 
@@ -209,18 +304,9 @@ class SteamRIPScraper(QObject):
             self.browser.raise_()
             self.browser.activateWindow()
 
-        if self.timeout_counter > 60: 
-            self.timer.stop()
-            self.browser.hide()
-            print("[Scraper] ❌ Timeout! Operation cancelled.")
-            mode = self.current_mode
-            self.current_mode = None
-            if mode == "silent_update":
-                self.silent_update_ready.emit({}, getattr(self, 'current_silent_title', ''))
-            elif mode == "cover":
-                self.cover_fetched.emit(getattr(self, 'current_cover_title', ''), '')
-            else:
-                self.error_occurred.emit("Timeout during data processing.")
+        if self.timeout_counter > 60:
+            log.info("[Scraper] ❌ Timeout! Operation cancelled.")
+            self._finish_job(emit_timeout=True)
             return
 
         if self.timeout_counter <= 3:
@@ -270,8 +356,8 @@ class SteamRIPScraper(QObject):
             self.page.toHtml(self._extract_cf_data)
 
     def _extract_cf_data(self, html):
-        self.current_mode = None
         self.cf_bypassed.emit(html, {})
+        self._complete_job()
 
     def _handle_extract_check(self, element_found):
         if element_found:
@@ -292,238 +378,44 @@ class SteamRIPScraper(QObject):
             self.page.toHtml(self._parse_cover_html)
 
     def _parse_cover_html(self, html):
-        self.current_mode = None
         try:
-            soup = BeautifulSoup(html, 'lxml')
-            img_tag = soup.find('figure', class_='single-featured-image')
-            if img_tag and img_tag.find('img'):
-                img_tag = img_tag.find('img')
-            else:
-                img_tag = (soup.find('img', class_='wp-post-image')
-                           or soup.find('article img')
-                           or soup.find('img'))
-            img_url = ""
-            if img_tag:
-                img_url = (img_tag.get('data-src') or img_tag.get('data-lazy-src')
-                           or img_tag.get('src', ''))
-                if img_url.startswith('//'):
-                    img_url = "https:" + img_url
-                elif img_url.startswith('/'):
-                    img_url = "https://steamrip.com" + img_url
-            self.cover_fetched.emit(getattr(self, 'current_cover_title', ''), img_url)
+            img_url = parse_cover_html(html)
+            self.cover_fetched.emit(
+                self.current_job.title if self.current_job else '', img_url)
         except Exception as e:
-            print(f"[Scraper] ❌ Cover Parsing Error: {str(e)}")
-            self.cover_fetched.emit(getattr(self, 'current_cover_title', ''), '')
+            log.exception(f"[Scraper] ❌ Cover Parsing Error: {str(e)}")
+            self.cover_fetched.emit(
+                self.current_job.title if self.current_job else '', '')
+        finally:
+            self._complete_job()
 
     def _parse_catalog_html(self, html):
         try:
-            soup = BeautifulSoup(html, 'lxml')
-            games_dict = {}
-            for a in soup.find_all('a'):
-                title = a.get_text(strip=True)
-                href = a.get('href', '').strip()
-                if title and href:
-                    if href.startswith('/'):
-                        href = "https://steamrip.com" + href
-                    elif href.startswith('//'):
-                        href = "https:" + href
-                        
-                    if "steamrip.com" in href:
-                        forbidden = ['/games-list-page', '/faq', '/category', '/genre', '/update-request', '?s=', 'wp-admin', 'wp-login']
-                        if not any(f in href.lower() for f in forbidden) and len(title) > 2:
-                            clean, version, mp_tag = strip_title(title)
-                            games_dict[clean] = {
-                                "url": href,
-                                "raw_title": title,
-                                "version": version,
-                                "mp_tag": mp_tag,
-                            }
-                            
-            self.current_mode = None
-            print(f"[Scraper] Catalog parsing completed: {len(games_dict)} games indexed.")
+            games_dict = parse_catalog_html(html)
+            log.info(f"[Scraper] Catalog parsing completed: {len(games_dict)} games indexed.")
             self.catalog_ready.emit(games_dict)
         except Exception as e:
-            self.current_mode = None
-            print(f"[Scraper] ❌ Catalog Parsing Error: {str(e)}")
+            log.exception(f"[Scraper] ❌ Catalog Parsing Error: {str(e)}")
             self.error_occurred.emit(f"Catalog Parsing Error: {str(e)}")
-
+        finally:
+            self._complete_job()
 
     def _parse_extract_html(self, html):
-        print(f"[Python DEBUG] _parse_extract_html INIZIATO! Lunghezza HTML: {len(html) if html else 0}")
         try:
-            print("[Python DEBUG] Step 1: Inizio BeautifulSoup parsing...")
-            soup = BeautifulSoup(html, 'lxml')
-            
-            print("[Python DEBUG] Step 2: Estrazione Immagine e Titolo...")
-            img_tag = soup.find('figure', class_='single-featured-image')
-            if img_tag and img_tag.find('img'):
-                img_tag = img_tag.find('img')
-            else:
-                img_tag = soup.find('img', class_='wp-post-image')
-            
-            img_url = ""
-            if img_tag:
-                img_url = img_tag.get('data-src') or img_tag.get('data-lazy-src') or img_tag.get('src', '')
-                if img_url.startswith('//'): img_url = "https:" + img_url
-                elif img_url.startswith('/'): img_url = "https://steamrip.com" + img_url
-
-            title_tag = soup.find('h1', class_='entry-title') or soup.find('h1')
-            raw_title = title_tag.text.strip() if title_tag else "Unknown Title"
-
-            title, version, mp_tag = strip_title(raw_title)
-
-            # Categorie SteamRip reali (link rossi sotto il titolo)
-            steamrip_categories = []
-            cat_wrap = soup.find(class_='post-cat-wrap')
-            if cat_wrap:
-                for a in cat_wrap.find_all('a'):
-                    for cls in a.get('class', []) or []:
-                        m = re.match(r'tie-cat-(\d+)', cls)
-                        if m:
-                            steamrip_categories.append(int(m.group(1)))
-                            break
-
-            content_div = soup.find(class_='entry-content')
-            
-            links = []
-            desc_html, req_html, info_html, dlcs_html = "", "", "", ""
-            current_sec = "desc"
-
-            if content_div:
-                for el in content_div.find_all(recursive=False):
-                    text_lower = el.get_text(strip=True).lower()
-                    if el.name == 'hr' or 'clearfix' in el.get('class', []) or 'sharedaddy' in el.get('class', []): continue
-                    if el.name in ['h2', 'h3', 'h4']:
-                        if 'screenshot' in text_lower:
-                            current_sec = "skip"
-                            continue
-                        elif 'requirement' in text_lower or 'minimum:' in text_lower:
-                            current_sec = "req"
-                            continue
-                        elif 'game info' in text_lower or 'game detail' in text_lower:
-                            current_sec = "info"
-                            continue
-                    
-                    if el.name == 'div' and 'toggle' in el.get('class', []):
-                        head = el.find(class_='toggle-head')
-                        if head:
-                            head_text = head.get_text(strip=True).lower()
-                            if 'dlc' in head_text:
-                                ul = el.find('ul')
-                                if ul: dlcs_html += str(ul)
-                                continue
-                            elif 'step' in head_text or 'how to' in head_text:
-                                continue 
-                    
-                    dl_found = False
-                    for a in el.find_all('a'):
-                        href = a.get('href', '').strip()
-                        if not href or href.startswith('#'): continue
-                        if href.startswith('//'): href = "https:" + href
-                        elif href.startswith('/'): href = "https://steamrip.com" + href
-
-                        href_lower = href.lower()
-                        if 'steamrip.com' in href_lower and '-free-download' in href_lower: continue
-                        is_dl = False
-                        classes = a.get('class', [])
-                        if 'shortc-button' in classes or 'wp-block-button__link' in classes: is_dl = True
-                        
-                        hosters_map = {
-                            'mega.nz': 'Mega', 'megadb': 'MegaDB', 'gofile.io': 'GoFile',
-                            '1fichier.com': '1Fichier', 'buzzheavier.com': 'Buzzheavier',
-                            'datanodes': 'DataNodes', 'qiwi.gg': 'Qiwi', 'pixeldrain.com': 'PixelDrain',
-                            'filecrypt.cc': 'FileCrypt', 'bowfile.com': 'Bowfile',
-                            'clicknupload': 'ClicknUpload', 'ddownload.com': 'DDownload',
-                            'hexupload.net': 'HexUpload', 'rapidgator.net': 'Rapidgator',
-                            'gamedrive.org': 'GameDrive', 'drive.google': 'Google Drive', 'mediafire.com': 'MediaFire'
-                        }
-                        
-                        if any(d in href_lower for d in hosters_map.keys()) or 'magnet:' in href_lower or is_dl:
-                            dl_found = True
-                            full_text = el.get_text(strip=True).lower()
-                            btn_text = a.get_text(strip=True)
-                            name = "Download"
-                            
-                            is_update = False
-                            update_version = ""
-                            if len(full_text) < 150 and re.search(r'\b(update|patch|dlc)\b', full_text):
-                                is_update = True
-                                strong_tag = el.find('strong')
-                                if strong_tag:
-                                    update_version = strong_tag.get_text(" ", strip=True)
-                                else:
-                                    text_nodes = [t for t in el.stripped_strings if t != btn_text]
-                                    update_version = " ".join(text_nodes)[:50]
-                                
-                            if 'magnet:' in href_lower or 'torrent' in full_text:
-                                name = 'Torrent (Magnet)'
-                            else:
-                                matched = False
-                                for domain, host_name in hosters_map.items():
-                                    if domain in href_lower:
-                                        name = host_name
-                                        matched = True
-                                        break
-                                if not matched:
-                                    if btn_text and len(btn_text) < 20 and 'download' not in btn_text.lower():
-                                        name = btn_text
-                                    else:
-                                        match = re.search(r'https?://(?:www\.)?([^/]+)', href)
-                                        if match: name = match.group(1).capitalize() 
-
-                            if not any(l['url'] == href for l in links):
-                                links.append({"name": name, "url": href, "is_update": is_update, "update_version": update_version})
-                                
-                    if dl_found: continue 
-                    if el.find('img'): continue
-                    if 'free download' in text_lower and len(text_lower) < 50: continue
-                    if current_sec == "skip": continue
-                    
-                    html_chunk = str(el)
-                    if current_sec == "req": req_html += html_chunk
-                    elif current_sec == "info": info_html += html_chunk
-                    elif current_sec == "desc": desc_html += html_chunk
-
-            if dlcs_html:
-                desc_html += f"<details style='background-color:rgba(115, 61, 145, 0.15); padding: 10px; border: 1px solid #733d91; border-radius: 5px; margin-top: 15px;'><summary style='color:#ff00a0; font-weight:bold; cursor:pointer; font-size:14px; outline: none;'>📦 MOSTRA DLC INCLUSI ({dlcs_html.count('<li>')} Pacchetti)</summary>{dlcs_html}</details>"
-
-            base_css = "<style>body { color: #e0e0e0; font-family: 'Segoe UI', Arial; font-size: 13px; margin:0; } a { color: #ff00a0; text-decoration: underline; } ul { padding-left: 20px; margin-top: 5px; } li { margin-bottom: 4px; } h2, h3, h4 { color: #f3c6ff; margin-top: 10px; margin-bottom: 5px; font-size: 14px; text-transform: uppercase; } p { margin-top: 5px; margin-bottom: 5px; line-height: 1.5; } strong, b { color: #ffffff; }</style>"
-
-            cover_urls = [img_url] if img_url else []
-
-            # Widget "Version Status" del sito: build SteamRIP vs build Steam
-            version_status = parse_version_status_html(html) or {}
-
-            parsed_data = {
-                "title": title, "version": version, "mp_tag": mp_tag, "img_url": img_url,
-                "sgdb_assets": {"steam_app_id": "", "grid": "", "hero": "", "logo": "", "wide": ""},
-                "cover_urls": cover_urls,
-                "description": base_css + desc_html if desc_html else "Nessuna descrizione trovata.",
-                "requirements": base_css + req_html if req_html else "Dati requisiti non disponibili.",
-                "game_info": base_css + info_html if info_html else "Nessuna info tecnica aggiuntiva.",
-                "links": links,
-                "page_url": self.browser.url().toString(),
-                "steam_id": str(version_status.get("app_id", "") or ""),
-                "version_status": version_status,
-                "steamrip_categories": steamrip_categories,
-            }
-            
+            parsed_data = parse_game_page_html(html)
+            parsed_data["page_url"] = self.browser.url().toString()
             if self.current_mode == "silent_update":
-                self.silent_update_ready.emit(parsed_data, getattr(self, 'current_silent_title', ''))
+                self.silent_update_ready.emit(
+                    parsed_data, self.current_job.title if self.current_job else '')
             else:
                 self.extract_ready.emit(parsed_data)
-                # Le asset SteamGridDB vengono richieste da MainWindow.display_game_data()
-                # solo se non sono già in cache (vedi needs_sgdb_fetch), evitando
-                # una chiamata API a ogni caricamento pagina.
-
-            self.current_mode = None
-                
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            log.exception("[Scraper] Unexpected error while handling the page")
             mode = self.current_mode
-            self.current_mode = None
             if mode == "silent_update":
-                self.silent_update_ready.emit({}, getattr(self, 'current_silent_title', ''))
+                self.silent_update_ready.emit(
+                    {}, self.current_job.title if self.current_job else '')
             else:
                 self.error_occurred.emit(str(e))
+        finally:
+            self._complete_job()

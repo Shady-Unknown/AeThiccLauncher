@@ -91,6 +91,7 @@ def disable_scrollbar_menu(scroll_area):
         for bar in (scroll_area.verticalScrollBar(), scroll_area.horizontalScrollBar()):
             bar.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
     except Exception:
+        # best-effort: the scrollbar tweak is cosmetic
         pass
 
 
@@ -99,6 +100,7 @@ def disable_widget_scrollbars_menu(widget):
     try:
         disable_scrollbar_menu(widget)
     except Exception:
+        # best-effort: the scrollbar tweak is cosmetic
         pass
 
 

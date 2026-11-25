@@ -22,10 +22,16 @@ to (re)create every subdirectory.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import os
 import sys
 from pathlib import Path
+
+from core.atomic_io import atomic_write_json
+
+log = logging.getLogger(__name__)
 
 BOOTSTRAP_FILENAME = "aethicc.paths.json"
 LEGACY_APP_DIRNAME = "AeThiccLauncher"
@@ -135,9 +141,7 @@ class PathManager:
         root.mkdir(parents=True, exist_ok=True)
         target = cls._writable_bootstrap_target()
         payload = {"data_root": str(root)}
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        os.replace(tmp, target)
+        atomic_write_json(target, payload, indent=2)
 
         cls._root = root
         cls._bootstrap_path = target
@@ -234,7 +238,7 @@ class PathManager:
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
-                print(f"[Paths] Cannot create {directory}: {exc}")
+                log.exception(f"[Paths] Cannot create {directory}: {exc}")
 
 
 def initialize() -> None:

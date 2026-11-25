@@ -4,12 +4,12 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
 import base64
 import tempfile
-import json
 import shutil
 import subprocess
 import time
@@ -37,10 +37,13 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
+from core.atomic_io import atomic_write_json
+from core.cache_limits import trim_mapping
 from core.config import get_base_dir
 from core.mini_cover_cache import MiniCoverManager
 
@@ -56,12 +59,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -86,25 +88,35 @@ from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
 
+log = logging.getLogger(__name__)
+
+SESSION_CACHE_LIMIT = 500
+
 # --- APP WINDOW PRINCIPALE ---
 
 class CatalogController:
     def _schedule_background_scan(self, delay_ms=60000):
         """Avvia il controllo aggiornamenti in background dopo l'avvio."""
-        print(f"[App] Background Update Scanner tra {delay_ms // 1000}s")
-        QTimer.singleShot(delay_ms, self.bg_scanner.start_background_update_checker)
+        log.info(f"[App] Background Update Scanner tra {delay_ms // 1000}s")
+        QTimer.singleShot(delay_ms, self.bg_scan_coordinator.start_background_update_checker)
 
     def _should_update_catalog(self):
         return self.master_catalog.needs_refresh()
 
+    def _trim_session_cache(self):
+        return trim_mapping(self.session_cache, SESSION_CACHE_LIMIT, "cached_at")
+
     def _save_offline_cache(self):
         """Salva la session_cache su disco per non perdere i dati delle schede gioco."""
+        removed = self._trim_session_cache()
+        if removed:
+            log.info(f"[App] Offline cache: rimossi {removed} record più vecchi")
         os.makedirs(os.path.dirname(self.offline_cache_file), exist_ok=True)
         try:
-            with open(self.offline_cache_file, 'w', encoding='utf-8') as f:
-                json.dump(self.session_cache, f, indent=4, ensure_ascii=False)
+            atomic_write_json(self.offline_cache_file, self.session_cache,
+                              indent=4, fsync=False)
         except Exception as e:
-            print(f"[App] Errore salvataggio offline_cache: {e}")
+            log.exception(f"[App] Errore salvataggio offline_cache: {e}")
 
     def _is_cache_stale_for_installed_game(self, cached_data, title):
         """Check if cached game page data is stale vs master_catalog for installed games."""
@@ -124,7 +136,7 @@ class CatalogController:
         return cached_ver != catalog_ver
 
     def fetch_master_catalog(self):
-        print("[App] Starting silent background database update...")
+        log.info("[App] Starting silent background database update...")
         # Show progress bar, disable button
         self.db_progress.show() 
         
@@ -139,7 +151,7 @@ class CatalogController:
 
     def _on_catalog_ready(self, catalog_dict):
         size = self.master_catalog.refresh_from_remote(catalog_dict)
-        print(f"[App] Background update complete! {size} games in catalog.")
+        log.info(f"[App] Background update complete! {size} games in catalog.")
         self.completer_model.setStringList(list(self.master_catalog.keys()))
         self.db_progress.hide()
         self.search_input.setPlaceholderText(f"Database Ready! {size} games indexed. Search here...")
@@ -155,7 +167,7 @@ class CatalogController:
             del self.session_cache[url]
             stale_count += 1
         if stale_count > 0:
-            print(f"[App] Invalidated {stale_count} stale session cache entries after catalog refresh")
+            log.info(f"[App] Invalidated {stale_count} stale session cache entries after catalog refresh")
             self._save_offline_cache()
 
         self._schedule_background_scan()
@@ -163,7 +175,7 @@ class CatalogController:
             self.savegames_manager.update_manifest_background()
 
     def _on_catalog_error(self, err):
-        print(f"[App] Critical database error: {err}")
+        log.warning(f"[App] Critical database error: {err}")
         self.db_progress.hide() 
         
         if self.master_catalog:

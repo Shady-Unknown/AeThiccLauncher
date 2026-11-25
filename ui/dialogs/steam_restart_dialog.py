@@ -18,8 +18,8 @@ class SteamRestartDialog(QDialog):
             "To apply the library changes, Steam needs to be restarted.<br><br>"
             "Choose <b>Kill &amp; Restart Now</b> to complete the integration immediately. "
             "Steam will be safely closed, the new shortcut added, and Steam restarted automatically.<br><br>"
-            "Choose <b>Wait</b> if you're downloading something or want to add more games first. "
-            "The shortcut will still be added &mdash; just restart Steam later to see it."
+            "Choose <b>Apply and Close Steam</b> if you're downloading something or want to add more games first. "
+            "Steam will be closed to write the shortcut; reopen it whenever you're ready."
         )
         lbl_warn.setWordWrap(True)
         lbl_warn.setStyleSheet(
@@ -38,7 +38,7 @@ class SteamRestartDialog(QDialog):
         )
         self.btn_restart.clicked.connect(lambda: self.make_choice(True))
 
-        self.btn_wait = QPushButton("Wait, I'll Restart Later")
+        self.btn_wait = QPushButton("Apply and Close Steam")
         self.btn_wait.setStyleSheet(
             "QPushButton { background-color: transparent; color: #8a7fa4; border: 1px solid #8a7fa4; padding: 8px 16px; }"
             "QPushButton:hover { color: white; border: 1px solid white; }"

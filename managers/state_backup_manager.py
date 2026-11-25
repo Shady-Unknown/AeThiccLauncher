@@ -13,6 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
+from core.atomic_io import atomic_write_json
 from core.jsonl_store import JsonlStore
 from core.paths import PathManager
 
@@ -41,16 +42,6 @@ def _read_json(path: Path, default):
     except (OSError, ValueError, TypeError):
         return default
     return value if value is not None else default
-
-
-def _write_json_atomic(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 class StateBackupManager:
@@ -150,7 +141,8 @@ class StateBackupManager:
             shutil.copy2(source, tmp / name)
             copied += 1
 
-        _write_json_atomic(tmp / MANIFEST_FILE, self._manifest())
+        atomic_write_json(tmp / MANIFEST_FILE, self._manifest(),
+                          separators=(",", ":"))
 
         previous = root / CURRENT_DIR
         shutil.rmtree(previous, ignore_errors=True)
@@ -221,7 +213,9 @@ class StateBackupManager:
             return 0
 
         local_store = JsonlStore(local_path)
-        local_records = local_store.load()
+        # Work on copies: the store caches parsed records and a failed rewrite
+        # must never leave the cache holding changes that never hit the disk.
+        local_records = [dict(record) for record in local_store.load()]
         by_id = {r.get("id"): r for r in local_records if r.get("id")}
 
         added = 0
@@ -288,7 +282,7 @@ class StateBackupManager:
                 progress[achievement_id] = entry
         local["progress"] = progress
 
-        _write_json_atomic(local_path, local)
+        atomic_write_json(local_path, local, separators=(",", ":"))
         return added
 
     @staticmethod
@@ -309,4 +303,4 @@ class StateBackupManager:
                 local[key] = value
                 changed = True
         if changed:
-            _write_json_atomic(local_path, local)
+            atomic_write_json(local_path, local, separators=(",", ":"))

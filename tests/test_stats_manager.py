@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -288,6 +289,35 @@ class StatsManagerTests(unittest.TestCase):
         self.manager.invalidate()
         third = self.manager.snapshot()
         self.assertIsNot(first, third)
+
+    def test_non_blocking_snapshot_uses_the_last_built_snapshot(self):
+        first = self.manager.snapshot()
+        self.manager.invalidate()
+
+        last = self.manager.snapshot(allow_build=False)
+
+        self.assertIs(last, first)
+
+    def test_cached_snapshot_does_not_build(self):
+        first = self.manager.snapshot()
+        with mock.patch.object(self.manager, "_build") as build:
+            self.assertIs(self.manager.cached_snapshot(), first)
+            build.assert_not_called()
+        self.assertIsNone(self.manager.cached_snapshot(range_key="365d"))
+
+    def test_invalidate_during_build_does_not_cache(self):
+        original_build = self.manager._build
+
+        def build(*args):
+            snapshot = original_build(*args)
+            self.manager.invalidate()
+            return snapshot
+
+        with mock.patch.object(self.manager, "_build", side_effect=build):
+            snapshot = self.manager.snapshot()
+
+        self.assertIsNone(self.manager._cache)
+        self.assertIsNotNone(snapshot)
 
     def test_region_change_uses_other_catalog_region(self):
         self.catalog.prices["Game A"] = {

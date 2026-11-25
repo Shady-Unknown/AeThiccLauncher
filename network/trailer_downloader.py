@@ -10,6 +10,7 @@ MP4 with ffmpeg.
 The old "one ffmpeg process on the master playlist" path is kept as a
 fallback for playlists the parser does not understand.
 """
+import logging
 import os
 import re
 import shutil
@@ -26,6 +27,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.config import get_base_dir
 from core.paths import PathManager
+
+log = logging.getLogger(__name__)
 
 CACHE_DIRNAME = "trailers"
 MAX_CACHE_BYTES = 1024 * 1024 * 1024   # 1 GB, LRU eviction
@@ -171,10 +174,10 @@ def _bundled_ffmpeg():
             with z.open(name) as src, open(tmp, "wb") as dst:
                 shutil.copyfileobj(src, dst, 1024 * 1024)
         os.replace(tmp, exe)
-        print("[TrailerDownload] ffmpeg estratto da bin/ffmpeg.zip")
+        log.info("[TrailerDownload] ffmpeg estratto da bin/ffmpeg.zip")
         return exe
     except Exception as e:
-        print(f"[TrailerDownload] estrazione ffmpeg fallita: {e}")
+        log.exception(f"[TrailerDownload] estrazione ffmpeg fallita: {e}")
         return None
 
 
@@ -251,6 +254,7 @@ def prune_cache(max_bytes=MAX_CACHE_BYTES):
             except OSError:
                 pass
     except Exception:
+        # best-effort: cleanup/progress must not break the download
         pass
 
 
@@ -295,9 +299,9 @@ class TrailerDownloadWorker(QThread):
         except _Cancelled:
             return
         except TrailerDownloadError as exc:
-            print(f"[TrailerDownload] parallel download failed: {exc}")
+            log.exception(f"[TrailerDownload] parallel download failed: {exc}")
         except Exception as exc:
-            print(f"[TrailerDownload] parallel download error: {exc}")
+            log.exception(f"[TrailerDownload] parallel download error: {exc}")
         self._download_sequential()
 
     # ── parallel path ────────────────────────────────────────────────
@@ -324,7 +328,7 @@ class TrailerDownloadWorker(QThread):
                 audio_init, audio_segments = parse_media_playlist(
                     _get(master["audio"]).text, master["audio"])
             except TrailerDownloadError as exc:
-                print(f"[TrailerDownload] audio playlist skipped: {exc}")
+                log.exception(f"[TrailerDownload] audio playlist skipped: {exc}")
                 audio_init, audio_segments = "", []
 
         total = len(video_segments) + len(audio_segments)
@@ -491,6 +495,7 @@ class TrailerDownloadWorker(QThread):
                     last_pct = pct
                     self.progress.emit(pct)
         except Exception:
+            # best-effort: cleanup/progress must not break the download
             pass
 
         try:

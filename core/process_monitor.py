@@ -1,9 +1,12 @@
+import logging
 import psutil
 import time
 import os
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core import platform_info
+
+log = logging.getLogger(__name__)
 
 class GameMonitorThread(QThread):
     game_exited_signal = pyqtSignal(dict)
@@ -54,6 +57,7 @@ class GameMonitorThread(QThread):
                 if self.target_exe_lower and exe_lower == self.target_exe_lower:
                     return True
         except Exception:
+            # best-effort: the process may exit while it is inspected
             pass
         return False
 
@@ -86,12 +90,12 @@ class GameMonitorThread(QThread):
                     if self._signature_matches(proc.info):
                         self.pid = proc.pid
                         self.pid_create_time = proc.info.get('create_time')
-                        print(f"[Monitor] Riancorato al processo {proc.pid} ({proc.info.get('name')})")
+                        log.info(f"[Monitor] Riancorato al processo {proc.pid} ({proc.info.get('name')})")
                         return True
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except Exception as e:
-            print(f"[Monitor] Errore nella scansione processi: {e}")
+            log.exception(f"[Monitor] Errore nella scansione processi: {e}")
         return False
 
     def _try_process_handoff(self):
@@ -110,11 +114,12 @@ class GameMonitorThread(QThread):
                     self.pid = proc.pid
                     self.pid_create_time = child_ct
                     self.handoffs_used += 1
-                    print(f"[Monitor] Handoff a processo figlio (PID {self.pid})")
+                    log.info(f"[Monitor] Handoff a processo figlio (PID {self.pid})")
                     return True
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except Exception:
+            # best-effort: the process may exit while it is inspected
             pass
         return False
 
@@ -132,7 +137,7 @@ class GameMonitorThread(QThread):
             else:
                 regex_target = target_filename
             
-            print(f"[Monitor] In attesa che il processo appaia (Fuzzy Match): {target_filename}")
+            log.info(f"[Monitor] In attesa che il processo appaia (Fuzzy Match): {target_filename}")
             timeout = 60
             start_wait = time.time()
             found_host = False
@@ -146,6 +151,7 @@ class GameMonitorThread(QThread):
                             found_host = True
                             break
                     except Exception:
+                        # best-effort: the process may exit while it is inspected
                         pass
                 else:
                     parent = None
@@ -172,11 +178,11 @@ class GameMonitorThread(QThread):
                 time.sleep(1)
             
             if not found_host and not self.pid:
-                print("[Monitor] Timeout: Impossibile agganciare il processo dopo il lancio via Steam.")
+                log.warning("[Monitor] Timeout: Impossibile agganciare il processo dopo il lancio via Steam.")
                 return
                 
             if found_host:
-                print(f"[Monitor] Monitoraggio attivo via host-pgrep per {target_filename} ({self.meta.get('title')})")
+                log.info(f"[Monitor] Monitoraggio attivo via host-pgrep per {target_filename} ({self.meta.get('title')})")
                 while self._is_running:
                     try:
                         import subprocess
@@ -184,21 +190,21 @@ class GameMonitorThread(QThread):
                         if res.returncode != 0 or not res.stdout.strip():
                             break
                     except Exception as e:
-                        print(f"[Monitor] Errore critico nel monitoraggio host: {e}")
+                        log.exception(f"[Monitor] Errore critico nel monitoraggio host: {e}")
                         break
                     time.sleep(2)
-                print(f"[Monitor] Gioco '{self.meta.get('title')}' chiuso (Host). Segnalazione backup...")
+                log.info(f"[Monitor] Gioco '{self.meta.get('title')}' chiuso (Host). Segnalazione backup...")
                 self._emit_exit()
                 return
 
         # MONITORAGGIO ROBUSTO (Windows/native): firma del gioco + anti PID-reuse
         if not self._tracked_process_alive():
             if not self._find_matching_process() and not self._try_process_handoff():
-                print(f"[Monitor] Processo '{self.meta.get('title')}' già terminato all'avvio del monitoraggio.")
+                log.info(f"[Monitor] Processo '{self.meta.get('title')}' già terminato all'avvio del monitoraggio.")
                 self._emit_exit()
                 return
 
-        print(f"[Monitor] Monitoraggio attivo per {self.meta.get('title')} (PID {self.pid})")
+        log.info(f"[Monitor] Monitoraggio attivo per {self.meta.get('title')} (PID {self.pid})")
 
         clean_scans = 0
         while self._is_running:
@@ -209,7 +215,7 @@ class GameMonitorThread(QThread):
             else:
                 clean_scans += 1
                 if clean_scans >= 3:
-                    print(f"[Monitor] Gioco '{self.meta.get('title')}' chiuso. Segnalazione backup...")
+                    log.info(f"[Monitor] Gioco '{self.meta.get('title')}' chiuso. Segnalazione backup...")
                     self._emit_exit()
                     return
             time.sleep(2)

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core import secrets
+from core.task_registry import TaskRegistry
 
 
 class _SecretTestWorker(QThread):
@@ -248,6 +249,9 @@ class ApiKeysForm(QWidget):
         status_label.setText("Testing…")
         status_label.setStyleSheet("color: #9c9c9c; font-size: 11px;")
         worker = _SecretTestWorker(kind, values, self)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
         worker.done.connect(
             lambda ok, msg: self._on_test_done(button, status_label, ok, msg)
         )

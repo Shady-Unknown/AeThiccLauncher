@@ -10,7 +10,7 @@ MANIFEST="$FLATPAK_DIR/com.MJK.AeThiccLauncher.yml"
 OUTPUT="Ae_Thicc_Launcher_Linux.flatpak"
 
 # Container image for PyInstaller — must have an older glibc than the Flatpak runtime
-BUILD_IMAGE="fedora:38"
+BUILD_IMAGE="python:3.12-slim-bookworm"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -41,8 +41,14 @@ elapsed() { echo -e "${DIM}    ($SECONDS seconds)${NC}"; }
 # ────────────────────────────────────────────────────────────────────
 header "Local System Dependencies (flatpak-builder, etc.)"
 SECONDS=0
-sudo dnf install -y \
-    git flatpak flatpak-builder
+if command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y git flatpak flatpak-builder
+elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y git flatpak flatpak-builder
+else
+    err "Install git, flatpak and flatpak-builder manually"
+fi
 ok "Local deps ready"
 elapsed
 
@@ -68,7 +74,13 @@ podman pull --quiet "$BUILD_IMAGE"
 info "Building binary inside container (this takes a while)..."
 echo ""
 
+SOURCE_DATE_EPOCH="$(git log -1 --format=%ct 2>/dev/null || echo 0)"
+info "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
+
 podman run --rm \
+    -e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+    -e AETHICC_BUILD_MODE=onefile \
+    -e AETHICC_APP_NAME="$APP_NAME" \
     -v "$SCRIPT_DIR":/work \
     -w /work \
     "$BUILD_IMAGE" \
@@ -76,40 +88,24 @@ podman run --rm \
         set -euo pipefail
 
         echo "── Installing system deps ──"
-        dnf install -y \
-            git nodejs python3 python3-pip \
-            mesa-libGL glib2-devel nss binutils \
-            libxml2-devel libxslt-devel \
-            libjpeg-turbo-devel zlib-devel libtiff-devel libwebp-devel
-
-        echo "── Setting up Python ──"
-        python3 -m venv /tmp/build-venv
-        # shellcheck disable=SC1091
-        source /tmp/build-venv/bin/activate
+        apt-get update
+        apt-get install -y --no-install-recommends \
+            git libgl1 libegl1 libnss3 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 binutils
 
         echo "── Installing Python packages ──"
-        pip install -r /work/requirements.txt
-        pip install pyinstaller
+        python -m pip install --upgrade pip
+        python -m pip install -r /work/requirements-build.txt
 
         echo "── Cleaning previous builds ──"
-        rm -rf /work/dist /work/build /work/'"$APP_NAME"'.spec
+        rm -rf /work/dist /work/build
 
         echo "── Compiling with PyInstaller ──"
-        pyinstaller \
-            --noconsole \
-            --onefile \
-            --clean \
-            --name '"$APP_NAME"' \
-            --collect-all "curl_cffi" \
-            --collect-all "certifi" \
-            --collect-all "keyring" \
-            --collect-all "secretstorage" \
-            --hidden-import "PyQt6.QtWebEngineWidgets" \
-            --hidden-import "PyQt6.QtWebEngineCore" \
-            main.py
+        python -m PyInstaller --clean --noconfirm Ae_Thicc_Launcher.spec
 
         echo "── Verifying binary ──"
-        ls -lh /work/dist/'"$APP_NAME"'
+        ls -lh "/work/dist/$AETHICC_APP_NAME"
         echo "DONE"
     '
 
@@ -172,6 +168,8 @@ info "Creating $OUTPUT..."
 flatpak build-bundle repo "$OUTPUT" com.MJK.AeThiccLauncher
 [ -f "$OUTPUT" ] || err "Flatpak bundle failed — $OUTPUT not found"
 ok "Output: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"
+python3 verify_release.py --platform linux --artifacts-dir . --generate-sums --require-sums
+ok "Checksum: SHA256SUMS.txt"
 elapsed
 
 # ────────────────────────────────────────────────────────────────────
@@ -180,7 +178,7 @@ elapsed
 header "Cleanup Build Artifacts"
 SECONDS=0
 info "Removing PyInstaller intermediates..."
-rm -rf dist build "$APP_NAME.spec"
+rm -rf dist build
 info "Removing copied assets from $FLATPAK_DIR/..."
 rm -f  "$FLATPAK_DIR/$APP_NAME"
 rm -rf "$FLATPAK_DIR/.media" "$FLATPAK_DIR/bin" "$FLATPAK_DIR/data" "$FLATPAK_DIR/lists"

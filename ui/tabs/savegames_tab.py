@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 import html
@@ -7,14 +8,18 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLab
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices, QPixmap, QAction, QCursor
 
-from managers.save_manager import safe_game_folder_name
+from core.naming import safe_game_folder_name
 from managers.playtime_manager import PlaytimeManager
 from managers.backup_service import BackupService
 from core import game_version
 from core.mini_cover_cache import MiniCoverManager
 from core import steam_integration
+from core.task_registry import TaskRegistry
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.savegame_card import SavegameCard
+from ui.savegames_worker import SavegamesTaskWorker
+
+log = logging.getLogger(__name__)
 
 MIRROR_STATE_LABELS = {
     'local_only': 'not mirrored yet',
@@ -44,6 +49,112 @@ def _format_manifest_time(value):
         return text
 
 
+def collect_card_data(sync_folder, manager, installed_games, app_config):
+    """Collect the savegame card data without touching any Qt object.
+
+    Runs inside ``SavegamesTaskWorker``: no widget, no QPixmap. The mirror
+    import/compare results are returned as data so the GUI thread can decide
+    whether to keep the previous coherent state (busy/cancelled/failed).
+    """
+    payload = {
+        'status': 'completed',
+        'detail': '',
+        'import_status': 'skipped',
+        'compare_status': 'skipped',
+        'mirror_states': None,
+        'cards': [],
+    }
+
+    if manager.get_mirror_folder():
+        import_result = manager.try_ensure_mirror_import()
+        payload['import_status'] = import_result.get('status', 'failed')
+        if payload['import_status'] == 'failed':
+            payload['import_detail'] = import_result.get('detail', '')
+        compare = manager.try_compare_mirror()
+        payload['compare_status'] = compare.get('status', 'failed')
+        if payload['compare_status'] == 'failed':
+            payload['compare_detail'] = compare.get('detail', '')
+        if payload['compare_status'] == 'completed':
+            states = {}
+            for entry in compare.get('entries') or []:
+                states[entry.get('safe_title')] = entry
+                states[entry.get('title')] = entry
+            payload['mirror_states'] = states
+
+    try:
+        names = sorted(os.listdir(sync_folder), key=str.lower)
+    except OSError as exc:
+        payload['status'] = 'failed'
+        payload['detail'] = str(exc)
+        return payload
+
+    display_mode = ((app_config or {}).get('playtime', {}) or {}).get('display', 'hours')
+    for name in names:
+        game_root = os.path.join(sync_folder, name)
+        try:
+            if not os.path.isdir(game_root):
+                continue
+            saves_dir = os.path.join(game_root, 'saves')
+            has_saves = os.path.isdir(saves_dir)
+
+            game_title = name
+            last_sync_str = "Never synced"
+            playtime_seconds = 0
+            meta_path = os.path.join(game_root, 'savegames.json')
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        smeta = json.load(f)
+                    game_title = smeta.get('game_title', name)
+                    last_sync_str = (
+                        _format_manifest_time(smeta.get('last_synced', ''))
+                        or "Never synced")
+                    playtime_seconds = int(smeta.get('playtime_seconds', 0) or 0)
+                except (OSError, ValueError, TypeError) as exc:
+                    # Best-effort preview metadata: the card still shows,
+                    # with the folder name and no playtime.
+                    log.warning("[Savegames] Could not read %s: %s", meta_path, exc)
+
+            # Skip folders with neither backups nor playtime.
+            if not has_saves and not playtime_seconds:
+                continue
+
+            if has_saves:
+                latest_mtime = manager.get_latest_save_time(saves_dir)
+                if latest_mtime:
+                    last_save_str = datetime.fromtimestamp(
+                        latest_mtime).strftime('%Y-%m-%d %H:%M')
+                else:
+                    last_save_str = "\u2014"
+            else:
+                last_save_str = "Playtime Only"
+
+            cover_path = MiniCoverManager.resolve_cover_path(
+                game_title, installed_games, sync_folder
+            )
+            playtime_str = (
+                PlaytimeManager.format_playtime(playtime_seconds, display_mode)
+                if playtime_seconds else "")
+
+            payload['cards'].append({
+                'game_root': game_root,
+                'folder_name': name,
+                'title': game_title,
+                'last_save': last_save_str,
+                'last_sync': last_sync_str,
+                'cover_path': cover_path or "",
+                'playtime': playtime_str,
+            })
+        except OSError as exc:
+            # A transient read error must not replace the last valid card list.
+            payload['status'] = 'failed'
+            payload['detail'] = str(exc)
+            payload['cards'] = []
+            return payload
+    return payload
+
+
+
 class SavegamesTab(QWidget):
     def __init__(self, app_config, installed_games, manager, parent=None, backup_service=None):
         super().__init__(parent)
@@ -54,6 +165,12 @@ class SavegamesTab(QWidget):
         self.app_window = parent
         self._cards = []
         self._cover_worker = None
+        self._task_worker = None
+        self._task_done_callback = None
+        self._refresh_worker = None
+        self._refresh_again = False
+        self._refresh_generation = 0
+        self._mirror_states_cache = {}
         self.init_ui()
 
     def init_ui(self):
@@ -236,7 +353,14 @@ class SavegamesTab(QWidget):
             )
             return
 
-        report = self.manager.push_mirror()
+        self._run_task(
+            self.manager.push_mirror,
+            self._on_mirror_done,
+            "Updating the mirror…",
+        )
+
+    def _on_mirror_done(self, report):
+        self.refresh_view()
         if report.get('errors'):
             QMessageBox.warning(
                 self, "Mirror finished with warnings",
@@ -252,28 +376,28 @@ class SavegamesTab(QWidget):
                     report.get('copied', 0), report.get('skipped', 0)
                 )
             )
-        self.refresh_view()
 
     def refresh_view(self):
+        """Refresh header and cards without blocking the GUI thread.
+
+        Data collection runs in ``SavegamesTaskWorker``; widget construction
+        happens in the completion callback on the GUI thread.
+        """
         local_folder = self.manager.get_sync_folder()
         mirror_folder = self.manager.get_mirror_folder()
-
-        self._clear_cards()
-        self.sync_info_label.setText("")
+        self._update_header(local_folder, mirror_folder)
         self.message_label.setText("")
 
-        self.btn_sync_all.setEnabled(True)
-        self.btn_open_sync.setEnabled(True)
-        self.btn_mirror.setEnabled(bool(mirror_folder))
-        self.btn_open_mirror.setEnabled(bool(mirror_folder) and os.path.exists(mirror_folder))
+        if not os.path.exists(local_folder):
+            self._clear_cards()
+            self.message_label.setText(
+                "The local backup folder does not exist yet. It will be created when you run a sync."
+            )
+            self.btn_open_sync.setEnabled(False)
+            return
+        self._start_refresh(local_folder)
 
-        # First run with a configured mirror: bring in backups that only exist
-        # there (one-time, copy only, nothing is deleted).
-        try:
-            self.manager.ensure_mirror_import()
-        except Exception as exc:
-            print(f"[Savegames] Mirror import failed: {exc}")
-
+    def _update_header(self, local_folder, mirror_folder):
         interval = self.app_config.get('savegames', {}).get('sync_interval', 30)
         unit = self.app_config.get('savegames', {}).get('sync_unit', 'minutes')
         mirror_html = html.escape(mirror_folder) if mirror_folder else "not configured"
@@ -282,15 +406,76 @@ class SavegamesTab(QWidget):
                 html.escape(local_folder), mirror_html, interval, unit
             )
         )
+        self.btn_sync_all.setEnabled(True)
+        self.btn_open_sync.setEnabled(True)
+        self.btn_mirror.setEnabled(bool(mirror_folder))
+        self.btn_open_mirror.setEnabled(
+            bool(mirror_folder) and os.path.exists(mirror_folder))
 
-        if not os.path.exists(local_folder):
-            self.message_label.setText(
-                "The local backup folder does not exist yet. It will be created when you run a sync."
-            )
-            self.btn_open_sync.setEnabled(False)
+    def _start_refresh(self, sync_folder):
+        if self._refresh_worker is not None and self._refresh_worker.isRunning():
+            # Coalesce: one extra refresh after the running one, never a stack.
+            self._refresh_again = True
             return
+        self._refresh_generation += 1
+        generation = self._refresh_generation
+        manager = self.manager
+        installed_games = self.installed_games
+        app_config = self.app_config
+        worker = SavegamesTaskWorker(
+            lambda: collect_card_data(
+                sync_folder, manager, installed_games, app_config),
+            self,
+        )
+        worker.finished_ok.connect(
+            lambda payload, w=worker: self._on_refresh_done(
+                generation, payload, w))
+        worker.failed.connect(
+            lambda message, w=worker: self._on_refresh_error(
+                generation, message, w))
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
+        self._refresh_worker = worker
+        worker.start()
 
-        self._populate_cards(local_folder)
+    def _on_refresh_done(self, generation, payload, worker=None):
+        # Only the current worker may clear the handle: a late callback from an
+        # older generation must not unlock stacking of a newer worker.
+        if worker is None or worker is self._refresh_worker:
+            self._refresh_worker = None
+        if generation != self._refresh_generation:
+            log.debug("[Savegames] Discarded a stale card refresh result")
+        elif payload.get('status') == 'completed':
+            compare_status = payload.get('compare_status')
+            if compare_status in ('busy', 'cancelled', 'failed'):
+                # Preserve the last coherent mirror state and the current
+                # cards instead of rebuilding a possibly partial view.
+                if compare_status == 'failed':
+                    log.warning("[Savegames] Mirror compare failed: %s",
+                                payload.get('compare_detail') or "unknown error")
+            else:
+                self._apply_cards(payload)
+        else:
+            log.warning("[Savegames] Card refresh failed: %s",
+                        payload.get('detail') or "unknown error")
+        if payload.get('import_status') == 'failed':
+            log.warning("[Savegames] Mirror import failed: %s",
+                        payload.get('import_detail') or "unknown error")
+        self._maybe_refresh_again()
+
+    def _on_refresh_error(self, generation, message, worker=None):
+        if worker is None or worker is self._refresh_worker:
+            self._refresh_worker = None
+        if generation == self._refresh_generation:
+            log.warning("[Savegames] Card refresh failed: %s", message)
+        self._maybe_refresh_again()
+
+    def _maybe_refresh_again(self):
+        again = self._refresh_again
+        self._refresh_again = False
+        if again:
+            self.refresh_view()
 
     def _clear_cards(self):
         while self.flow_layout.count():
@@ -299,76 +484,24 @@ class SavegamesTab(QWidget):
                 item.widget().deleteLater()
         self._cards.clear()
 
-    def _populate_cards(self, sync_folder):
-        mirror_states = {}
-        if self.manager.get_mirror_folder():
-            try:
-                for entry in self.manager.compare_mirror():
-                    mirror_states[entry.get('safe_title')] = entry
-                    mirror_states[entry.get('title')] = entry
-            except Exception as exc:
-                print(f"[Savegames] Mirror compare failed: {exc}")
+    def _apply_cards(self, payload):
+        if payload.get('mirror_states') is not None:
+            self._mirror_states_cache = payload['mirror_states']
+        mirror_states = self._mirror_states_cache
 
-        try:
-            names = sorted(os.listdir(sync_folder), key=str.lower)
-        except Exception:
-            return
-
-        for name in names:
-            game_root = os.path.join(sync_folder, name)
-            if not os.path.isdir(game_root):
-                continue
-            saves_dir = os.path.join(game_root, 'saves')
-            has_saves = os.path.isdir(saves_dir)
-
-            game_title = name
-            last_sync_str = "Never synced"
-            playtime_seconds = 0
-            meta_path = os.path.join(game_root, 'savegames.json')
-            if os.path.exists(meta_path):
-                try:
-                    with open(meta_path, 'r', encoding='utf-8') as f:
-                        smeta = json.load(f)
-                    game_title = smeta.get('game_title', name)
-                    last_sync_str = _format_manifest_time(smeta.get('last_synced', '')) or "Never synced"
-                    playtime_seconds = int(smeta.get('playtime_seconds', 0) or 0)
-                except Exception:
-                    pass
-
-            # Skip cartelle vuote (né backup né playtime)
-            if not has_saves and not playtime_seconds:
-                continue
-
-            if has_saves:
-                latest_mtime = self.manager.get_latest_save_time(saves_dir)
-                if latest_mtime:
-                    last_save_str = datetime.fromtimestamp(latest_mtime).strftime('%Y-%m-%d %H:%M')
-                else:
-                    last_save_str = "\u2014"
-            else:
-                last_save_str = "Playtime Only"
-
-            cover_path = MiniCoverManager.resolve_cover_path(
-                game_title, self.installed_games, sync_folder
-            )
-            if cover_path and cover_path.startswith("file://"):
-                # QUrl handles file:///C:/... on Windows; slicing [7:] leaves
-                # a leading slash (/C:/...) and QPixmap silently fails.
-                local_cover = QUrl(cover_path).toLocalFile()
-                px = QPixmap(local_cover) if local_cover else QPixmap()
-            else:
-                px = QPixmap()
-
-            display_mode = self.app_config.get('playtime', {}).get('display', 'hours')
-            playtime_str = PlaytimeManager.format_playtime(playtime_seconds, display_mode) if playtime_seconds else ""
-
-            card = SavegameCard(game_title, px, last_save_str, last_sync_str, game_root, playtime_str=playtime_str)
+        self._clear_cards()
+        for data in payload.get('cards') or []:
+            cover_path = data.get('cover_path') or ""
+            px = self._pixmap_for(cover_path)
+            card = SavegameCard(
+                data['title'], px, data['last_save'], data['last_sync'],
+                data['game_root'], playtime_str=data.get('playtime', ""))
             card.clicked.connect(self._on_card_clicked)
             card.context_menu_requested.connect(self._on_card_context_menu)
             if px.isNull():
                 # No installed cover and no minicover yet: resolve it lazily
                 # from the catalog/SGDB and update this card when ready.
-                self._request_cover(game_title)
+                self._request_cover(data['title'])
 
             theme = self.app_config.get('theme', {})
             neon = theme.get('bright_neon_accent', '#ff00a0')
@@ -386,12 +519,23 @@ class SavegamesTab(QWidget):
                 }}
             """.format(surface=surface, accent=accent, neon=neon))
 
-            state_entry = mirror_states.get(name) or mirror_states.get(game_title)
+            state_entry = (mirror_states.get(data['folder_name'])
+                           or mirror_states.get(data['title']))
             if state_entry:
                 card.setToolTip(self._mirror_tooltip(state_entry))
 
             self.flow_layout.addWidget(card)
             self._cards.append(card)
+
+    @staticmethod
+    def _pixmap_for(cover_path):
+        """Build the card pixmap on the GUI thread (never in the worker)."""
+        if cover_path and cover_path.startswith("file://"):
+            # QUrl handles file:///C:/... on Windows; slicing [7:] leaves a
+            # leading slash (/C:/...) and QPixmap silently fails.
+            local_cover = QUrl(cover_path).toLocalFile()
+            return QPixmap(local_cover) if local_cover else QPixmap()
+        return QPixmap()
 
     @staticmethod
     def _mirror_tooltip(entry):
@@ -412,6 +556,9 @@ class SavegamesTab(QWidget):
                 self,
             )
             self._cover_worker.cover_ready.connect(self._on_cover_ready)
+            registry = TaskRegistry.instance()
+            if registry is not None:
+                registry.track(self._cover_worker)
             self._cover_worker.start()
         else:
             self._cover_worker.update_context(
@@ -455,8 +602,65 @@ class SavegamesTab(QWidget):
         if os.path.isdir(game_root):
             QDesktopServices.openUrl(QUrl.fromLocalFile(game_root))
 
-    def sync_all(self):
-        summary = self.manager.sync_all_games()
+    def _run_task(self, task, callback, busy_text="Working…"):
+        if self._task_worker is not None and self._task_worker.isRunning():
+            QMessageBox.information(
+                self, "Please wait",
+                "Another savegame operation is still running.",
+            )
+            return False
+        self._task_done_callback = callback
+        self.btn_sync_all.setEnabled(False)
+        self.btn_mirror.setEnabled(False)
+        self.message_label.setText(busy_text)
+        worker = SavegamesTaskWorker(task, self)
+        worker.finished_ok.connect(self._on_task_finished)
+        worker.failed.connect(self._on_task_failed)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
+        self._task_worker = worker
+        worker.start()
+        return True
+
+    def _finish_task(self):
+        self._task_worker = None
+        callback = self._task_done_callback
+        self._task_done_callback = None
+        self._mirror_states_cache = {}
+        self.btn_sync_all.setEnabled(True)
+        self.btn_mirror.setEnabled(bool(self.manager.get_mirror_folder()))
+        return callback
+
+    def _on_task_finished(self, result):
+        callback = self._finish_task()
+        if callback is not None:
+            callback(result)
+
+    def _on_task_failed(self, message):
+        self._finish_task()
+        self.message_label.setText("")
+        QMessageBox.critical(
+            self, "Savegames",
+            f"The savegame operation failed:\n\n{message}",
+        )
+
+    def sync_all(self, silent=False, on_done=None):
+        started = self._run_task(
+            self.manager.sync_all_games,
+            lambda summary: self._on_sync_done(summary, silent, on_done),
+            "Syncing savegames…",
+        )
+        return started
+
+    def _on_sync_done(self, summary, silent, on_done):
+        self.refresh_view()
+        if not silent:
+            self._show_sync_summary(summary)
+        if on_done is not None:
+            on_done(summary)
+
+    def _show_sync_summary(self, summary):
         created = summary.get('synced_games', 0)
         unchanged = summary.get('unchanged_games', 0)
         mirror = summary.get('mirror') or {}
@@ -479,7 +683,23 @@ class SavegamesTab(QWidget):
                 )
             )
 
-        self.refresh_view()
+    def _on_playtime_restart_done(self, pm):
+        QMessageBox.information(
+            self, "Play Time Sync",
+            "Steam has been restarted. " + self._playtime_sync_text(pm)
+        )
+
+    @staticmethod
+    def _playtime_sync_text(pm):
+        pending = pm.pending_games()
+        if not pending:
+            return "Play time synced with Steam successfully."
+        titles = ", ".join(title for title, _ in pending[:3])
+        more = f" (+{len(pending) - 3} more)" if len(pending) > 3 else ""
+        return (
+            f"Play time synced for the writable games. {len(pending)} still pending "
+            f"(no writable Steam shortcut/account): {titles}{more}."
+        )
 
     def sync_playtime(self):
         """Sincronizzazione manuale del playtime con Steam (merge massimo).
@@ -504,7 +724,7 @@ class SavegamesTab(QWidget):
         if pm.try_flush_pending():
             QMessageBox.information(
                 self, "Play Time Sync",
-                "Play time synced with Steam successfully."
+                self._playtime_sync_text(pm)
             )
             self.refresh_view()
             return
@@ -539,17 +759,15 @@ class SavegamesTab(QWidget):
         clicked = msg.clickedButton()
 
         if clicked == btn_restart:
-            try:
+            def _restart_and_write():
                 steam_integration.kill_steam_safely()
                 pm.write_playtime_to_steam()
                 steam_integration._restart_steam()
-            except Exception as e:
-                QMessageBox.critical(self, "Play Time Sync", f"Could not write playtime:\n{e}")
-                self.refresh_view()
-                return
-            QMessageBox.information(
-                self, "Play Time Sync",
-                "Steam has been restarted and the play time was written to Steam."
+
+            self._run_task(
+                _restart_and_write,
+                lambda _result: self._on_playtime_restart_done(pm),
+                "Restarting Steam and writing play time…",
             )
         else:
             QMessageBox.information(
@@ -672,6 +890,7 @@ class SavegamesTab(QWidget):
                 with open(meta_path, 'r', encoding='utf-8') as f:
                     smeta = json.load(f)
             except Exception:
+                # best-effort: preview metadata is optional
                 pass
 
         game_title = smeta.get('game_title', '')
@@ -744,11 +963,35 @@ class SavegamesTab(QWidget):
             )
             return
 
-        snapshots = self.backup_service.list_snapshots(title)
+        self._run_task(
+            lambda: self.backup_service.try_list_snapshots(title),
+            lambda result: self._on_restore_snapshots_loaded(result, title, live_meta),
+            "Loading backups…",
+        )
+
+    def _on_restore_snapshots_loaded(self, result, title, live_meta):
+        status = result.get('status', 'completed')
+        if status == 'busy':
+            QMessageBox.information(
+                self, "Savegames Busy",
+                "Another savegame operation is still running. "
+                "The snapshot list was not changed; try again in a moment.",
+            )
+            return
+        if status != 'completed':
+            QMessageBox.critical(
+                self, "Backups Unavailable",
+                "The snapshot list could not be read: {}".format(
+                    html.escape(str(result.get('detail') or status))),
+            )
+            return
+        snapshots = result.get('snapshots') or []
         if not snapshots:
             QMessageBox.information(self, "No Backups", "No backup snapshots found for this game.")
             return
+        self._open_restore_dialog(title, live_meta, snapshots)
 
+    def _open_restore_dialog(self, title, live_meta, snapshots):
         destination = self.manager.get_source_save_path(live_meta)
         if not destination:
             QMessageBox.warning(
@@ -915,9 +1158,14 @@ class SavegamesTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        result = self.backup_service.restore_game(
-            live_meta, snap.get('id', ''), create_missing=create_missing
+        self._run_task(
+            lambda: self.backup_service.restore_game(
+                live_meta, snap.get('id', ''), create_missing=create_missing),
+            lambda result: self._on_restore_done(result, dialog, destination),
+            "Restoring the backup…",
         )
+
+    def _on_restore_done(self, result, dialog, destination):
         if result.get('ok'):
             safety = result.get('safety_snapshot') or "none"
             QMessageBox.information(
@@ -955,6 +1203,18 @@ class SavegamesTab(QWidget):
             'copy_failed': "The backup content could not be read or written.",
             'swap_failed': "The save folder could not be replaced.",
             'snapshot_content_missing': "The snapshot is missing its data file.",
+            'recovery_ambiguous': "A previous restore was interrupted. Both the live save folder "
+                                  "and its preserved copy were kept, so nothing was deleted. "
+                                  "Do not delete either copy before checking which one is the "
+                                  "save you want; the preserved copy ends with "
+                                  "<code>.restore_old</code>.",
+            'recovery_failed': "A previous restore was interrupted and the original copy could "
+                               "not be put back automatically. Nothing else was changed: keep "
+                               "the folder ending in <code>.restore_old</code> and the "
+                               "transaction journal until the save is recovered.",
+            'restore_journal_failed': "The restore transaction could not be recorded, so no "
+                                      "destructive step was performed. The save folder was left "
+                                      "as it was.",
         }
         text = messages.get(reason, "Unexpected error while restoring the backup.")
         if errors:

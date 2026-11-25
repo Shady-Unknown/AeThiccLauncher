@@ -119,7 +119,7 @@ class WindowsLaunchGameTests(unittest.TestCase):
     """Regressione: il lancio Windows deve passare da Steam quando c'è lo shortcut."""
 
     def _make_launcher(self, meta):
-        from core.game_launcher import GameLauncher
+        from ui.controllers.game_launcher import GameLauncher
 
         app_window = mock.MagicMock()
         app_window.installed_games = {"Hollow Knight": meta}
@@ -143,7 +143,7 @@ class WindowsLaunchGameTests(unittest.TestCase):
             with mock.patch.object(steam_integration.sys, "platform", "win32"), \
                  mock.patch.object(steam_integration, "launch_shortcut",
                                    lambda sid: launched.append(sid) or True), \
-                 mock.patch("core.game_launcher.subprocess.Popen",
+                 mock.patch("ui.controllers.game_launcher.subprocess.Popen",
                             mock.Mock(side_effect=AssertionError("direct launch"))):
                 launcher.launch_game("Hollow Knight")
 
@@ -166,7 +166,7 @@ class WindowsLaunchGameTests(unittest.TestCase):
             with mock.patch.object(steam_integration.sys, "platform", "win32"), \
                  mock.patch.object(steam_integration, "launch_shortcut",
                                    mock.Mock(return_value=False)), \
-                 mock.patch("core.game_launcher.subprocess.Popen",
+                 mock.patch("ui.controllers.game_launcher.subprocess.Popen",
                             lambda args, **kwargs: spawned.append(args) or mock.Mock(pid=4242)):
                 launcher.launch_game("Hollow Knight")
 

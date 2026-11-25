@@ -7,12 +7,16 @@ file manca.
 """
 from __future__ import annotations
 
+import logging
+
 import os
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
 from core.config import get_base_dir
+
+log = logging.getLogger(__name__)
 
 ICONS_SUBDIR = "icons"
 
@@ -74,7 +78,7 @@ def spec_icon_pixmap(key: str, size: int = 26, color: QColor | str | None = None
     if pixmap.isNull():
         if key not in _missing_logged:
             _missing_logged.add(key)
-            print(f"[Icons] missing icon '{key}': {path}")
+            log.info(f"[Icons] missing icon '{key}': {path}")
         return QPixmap()
 
     target = max(1, int(round(size * dpr)))

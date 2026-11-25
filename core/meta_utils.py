@@ -1,7 +1,12 @@
+import logging
 import json
 import os
 import re
 from datetime import datetime
+
+from core.atomic_io import atomic_write_json, preserve_corrupt_file
+
+log = logging.getLogger(__name__)
 
 GARBAGE_KEYS = {"description", "game_info", "requirements", "links"}
 
@@ -69,7 +74,11 @@ def save_steamrip_meta(install_dir, meta):
         try:
             with open(meta_file, "r", encoding="utf-8") as f:
                 existing = json.load(f)
-        except Exception:
+            if not isinstance(existing, dict):
+                raise ValueError("metadata root is not a JSON object")
+        except Exception as exc:
+            preserved = preserve_corrupt_file(meta_file)
+            log.exception(f"[MetaUtils] Corrupt metadata ({exc}); preserved at {preserved}")
             existing = {}
 
     clean = {}
@@ -85,7 +94,8 @@ def save_steamrip_meta(install_dir, meta):
 
     try:
         os.makedirs(install_dir, exist_ok=True)
-        with open(meta_file, "w", encoding="utf-8") as f:
-            json.dump(clean, f, indent=4, ensure_ascii=False)
+        atomic_write_json(meta_file, clean, indent=4, fsync=True)
     except Exception as e:
-        print(f"[MetaUtils] Save error: {e}")
+        log.exception(f"[MetaUtils] Save error: {e}")
+        return False
+    return True

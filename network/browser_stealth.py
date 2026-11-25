@@ -1,7 +1,10 @@
+import logging
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineUrlRequestInterceptor
+
+log = logging.getLogger(__name__)
 
 class PersistentWebView(QWebEngineView):
     def __init__(self, parent=None):
@@ -23,7 +26,7 @@ class StealthWebPage(QWebEnginePage):
         pass
 
     def createWindow(self, _type):
-        print("[AdBlock] 🛡️ Ghigliottina su tentativo di apertura Pop-up/Pop-under!")
+        log.info("[AdBlock] 🛡️ Ghigliottina su tentativo di apertura Pop-up/Pop-under!")
         return None  # Restituire None blocca fisicamente l'apertura della nuova finestra
 
     def acceptNavigationRequest(self, url, _type, isMainFrame):
@@ -42,14 +45,14 @@ class StealthWebPage(QWebEnginePage):
         ]
         
         if any(root in host for root in universal_trash_roots):
-            print(f"[AdBlock] 🛡️ Blocco Euristico (Parola chiave sospetta): {host}")
+            log.info(f"[AdBlock] 🛡️ Blocco Euristico (Parola chiave sospetta): {host}")
             return False
 
         if _type == QWebEnginePage.NavigationType.NavigationTypeRedirect:
             safe_domains = ['steamrip', 'megadb', 'buzzheavier', 'bzzhr', '1fichier', 'gofile', 'qiwi', 'pixeldrain', 'fileditch', 'datanodes', 'bowfile', 'clicknupload', 'ddownload', 'filecrypt', 'mediafire', 'google', 'gamedrive', 'krakenfiles']
             
             if not any(safe in host for safe in safe_domains):
-                print(f"[AdBlock] 🛡️ Blocco Comportamentale (Redirect non richiesto): {host}")
+                log.info(f"[AdBlock] 🛡️ Blocco Comportamentale (Redirect non richiesto): {host}")
                 return False
 
         return super().acceptNavigationRequest(url, _type, isMainFrame)

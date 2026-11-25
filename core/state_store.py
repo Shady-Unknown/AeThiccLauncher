@@ -11,16 +11,19 @@ break the launcher.
 from __future__ import annotations
 
 import json
-import os
+import logging
 import time
 import uuid
 from pathlib import Path
 
 from core import events as ev
+from core.atomic_io import atomic_write_json
 from core.events import EventBus
 from core.jsonl_store import JsonlStore
 from core.paths import PathManager
 from core.price_utils import detect_currency, parse_price_to_cents
+
+log = logging.getLogger(__name__)
 
 SESSION_FILE = "play_sessions.jsonl"
 INSTALL_FILE = "install_history.jsonl"
@@ -52,16 +55,6 @@ DEFAULT_PREFS = {
 
 def _utc_day(timestamp: int) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(int(timestamp)))
-
-
-def _write_json_atomic(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 def _read_json(path: Path, default):
@@ -107,6 +100,7 @@ class StateStore:
     # ------------------------------------------------------------------ setup
 
     def bind(self, events: EventBus) -> None:
+        self._events = events
         events.subscribe(ev.EVENT_SESSION_END, self.on_session_end)
         events.subscribe(ev.EVENT_GAME_INSTALLED, self.on_game_installed)
         events.subscribe(ev.EVENT_GAME_REMOVED, self.on_game_removed)
@@ -196,8 +190,31 @@ class StateStore:
             self._open_sessions.pop(title, None)
             self._write_marker()
 
+    def compact_history(self) -> dict:
+        """Deduplicate the JSONL history files; safe to run in the background.
+
+        Compaction only drops duplicate ids, so no play session, install,
+        usage event or price point is lost.
+        """
+        report = {}
+        for name, store in (
+            ("sessions", self.sessions),
+            ("installs", self.installs),
+            ("usage", self.usage),
+            ("prices", self.prices),
+        ):
+            try:
+                kept, original = store.compact(dedupe=True)
+                report[name] = (original, kept)
+                if kept != original:
+                    log.info(f"[State] {name}: compacted {original} -> {kept} records")
+            except Exception as exc:
+                log.exception(f"[State] compact failed for {name}: {exc}")
+        return report
+
     def _write_marker(self) -> None:
-        _write_json_atomic(self._marker_path, {"v": 1, "open": self._open_sessions})
+        atomic_write_json(self._marker_path, {"v": 1, "open": self._open_sessions},
+                          separators=(",", ":"))
 
     def _recover_open_sessions(self) -> None:
         data = _read_json(self._marker_path, {"open": {}})
@@ -365,5 +382,11 @@ class StateStore:
     def save_prefs(self, prefs: dict) -> dict:
         merged = self.load_prefs()
         merged.update(prefs or {})
-        _write_json_atomic(self._prefs_path, merged)
+        atomic_write_json(self._prefs_path, merged, separators=(",", ":"))
+        events = getattr(self, "_events", None)
+        if events is not None:
+            try:
+                events.emit_event(ev.EVENT_PREFS_CHANGED, merged)
+            except Exception as exc:
+                log.exception(f"[State] prefs_changed emit failed: {exc}")
         return merged

@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -21,6 +22,8 @@ import re
 import html
 from PyQt6.QtCore import Qt, QUrl, QTimer #QSize, pyqtSignal, QThread, QStringListModel
 from PyQt6.QtGui import QColor, QDesktopServices, QPixmap, QIcon #QPainter, QPainterPath, QIcon
+from core.task_registry import TaskRegistry
+from ui.savegames_worker import SavegamesTaskWorker
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QGraphicsDropShadowEffect,
                              QPushButton,
@@ -37,7 +40,8 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -56,12 +60,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -86,6 +89,8 @@ from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
 
+log = logging.getLogger(__name__)
+
 # --- APP WINDOW PRINCIPALE ---
 
 class SessionController:
@@ -105,7 +110,7 @@ class SessionController:
             try:
                 self.playtime_manager.record_session(title, session_seconds)
             except Exception as e:
-                print(f"[Playtime] Errore registrazione sessione: {e}")
+                log.exception(f"[Playtime] Errore registrazione sessione: {e}")
             self.events.emit_event(
                 EVENT_SESSION_END,
                 title=title,
@@ -117,20 +122,39 @@ class SessionController:
             # Legge playtime Steam con leggero ritardo (Steam può aggiornare
             # il valore dopo la chiusura del processo di gioco)
             QTimer.singleShot(5000, self._sync_playtime_after_session)
-        # 2. Backup on demand dei salvataggi
-        if self.savegames_manager.backup_on_demand(meta):
-            self.events.emit_event(
-                EVENT_BACKUP_CREATED,
-                title=title or meta.get('title') or '',
-                install_dir=meta.get('install_dir') or '',
-            )
-            QMessageBox.information(
-                self, 
-                "Backup Successful", 
-                f"Automatic save backup for <b>{meta.get('title')}</b> completed successfully after closing the game."
-            )
-            if hasattr(self, 'savegames_tab'):
-                self.savegames_tab.refresh_view()
+        # 2. Backup on demand dei salvataggi, fuori dal GUI thread.
+        self._start_session_backup(meta, title)
+
+    def _start_session_backup(self, meta, title):
+        """Run the post-session backup in a worker; report on the GUI thread."""
+        worker = SavegamesTaskWorker(
+            lambda: self.savegames_manager.backup_on_demand(meta), self)
+        self._session_backup_worker = worker
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
+        worker.finished_ok.connect(
+            lambda ok: self._on_session_backup_done(meta, title, ok))
+        worker.failed.connect(
+            lambda message: log.warning(f"[Savegames] Post-session backup failed: {message}"))
+        worker.start()
+
+    def _on_session_backup_done(self, meta, title, ok):
+        self._session_backup_worker = None
+        if not ok or getattr(self, "_shutdown_done", False):
+            return
+        self.events.emit_event(
+            EVENT_BACKUP_CREATED,
+            title=title or meta.get('title') or '',
+            install_dir=meta.get('install_dir') or '',
+        )
+        QMessageBox.information(
+            self,
+            "Backup Successful",
+            f"Automatic save backup for <b>{meta.get('title')}</b> completed successfully after closing the game."
+        )
+        if hasattr(self, 'savegames_tab'):
+            self.savegames_tab.refresh_view()
 
     def _sync_playtime_after_session(self):
         """Merge post-sessione: prende il massimo tra launcher e Steam."""
@@ -140,4 +164,4 @@ class SessionController:
             self.playtime_manager.sync_all()
             self.playtime_manager.try_flush_pending()
         except Exception as e:
-            print(f"[Playtime] Errore sync post-sessione: {e}")
+            log.exception(f"[Playtime] Errore sync post-sessione: {e}")

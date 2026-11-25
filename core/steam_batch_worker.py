@@ -6,9 +6,9 @@ class SteamBatchWorker(QThread):
     """
     Aggiunge in blocco a Steam una lista di giochi usando un solo account.
 
-    Steam viene chiuso dal chiamante UNA sola volta prima di avviare il worker
-    (altrimenti sovrascriverebbe shortcuts.vdf alla chiusura) e riavviato UNA
-    sola volta alla fine, se richiesto.
+    Steam viene chiuso dal worker UNA sola volta (altrimenti sovrascriverebbe
+    shortcuts.vdf alla chiusura) e riavviato UNA sola volta alla fine, se
+    richiesto. Il chiamante resta sul thread GUI solo per i dialoghi.
     """
 
     # (completati, totale, titolo in corso)
@@ -35,6 +35,9 @@ class SteamBatchWorker(QThread):
         successes = []
         failures = []
         total = len(self.jobs)
+
+        if not self._cancelled:
+            steam_integration.kill_steam_safely()
 
         for idx, job in enumerate(self.jobs, start=1):
             if self._cancelled:

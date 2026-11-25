@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -37,7 +38,8 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -56,12 +58,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -85,6 +86,8 @@ from network.steam_build_worker import SteamBuildWorker
 from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
+
+log = logging.getLogger(__name__)
 
 # --- APP WINDOW PRINCIPALE ---
 
@@ -110,7 +113,7 @@ class BaseController:
             # Ritorna HTML img tag con data URI - usa style inline per mantenere size fisso
             return f'<img src="data:image/svg+xml;base64,{b64}" width="{size}" height="{size}" style="margin: 0px 1px; vertical-align: middle; display: inline-block;">'
         except Exception as e:
-            print(f"[SVG Error] {e}")
+            log.exception(f"[SVG Error] {e}")
             return "●"
 
     def _colorize_icon(self, path, theme_data=None):
@@ -167,7 +170,8 @@ class BaseController:
             name = str(cookie.name(), 'utf-8')
             value = str(cookie.value(), 'utf-8')
             self.global_cookies[name] = value
-        except:
+        except (TypeError, ValueError, UnicodeDecodeError):
+            # best-effort: cookie bytes may not be UTF-8
             pass
 
     def open_local_path(self, path):

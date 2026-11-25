@@ -1,3 +1,4 @@
+import logging
 import re
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -5,7 +6,9 @@ from urllib.parse import quote, urljoin
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from managers.trailer_manager import TrailerManager
+from core.trailer_cache import TrailerManager
+
+log = logging.getLogger(__name__)
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -89,7 +92,7 @@ class TrailerWorker(QThread):
                     best_score = 1
             return best_id
         except Exception as e:
-            print(f"[TrailerWorker] Search error for '{title}': {e}")
+            log.exception(f"[TrailerWorker] Search error for '{title}': {e}")
             return None
 
     # ── appdetails fetch ─────────────────────────────────────────────
@@ -133,7 +136,7 @@ class TrailerWorker(QThread):
             variants = TrailerWorker._parse_variants(r.text, master_url)
             return variants or None
         except Exception as e:
-            print(f"[TrailerWorker] variant fetch error: {e}")
+            log.exception(f"[TrailerWorker] variant fetch error: {e}")
             return None
 
     @staticmethod
@@ -175,7 +178,7 @@ class TrailerWorker(QThread):
                             trailer["variants"] = variants
                     return appid, trailer
             except Exception as e:
-                print(f"[TrailerWorker] appdetails error ({appid}): {e}")
+                log.exception(f"[TrailerWorker] appdetails error ({appid}): {e}")
             return appid, None
 
         with ThreadPoolExecutor(max_workers=6) as pool:
@@ -214,5 +217,5 @@ class TrailerWorker(QThread):
                 resolved[title] = trailer
 
         found = sum(1 for t in resolved.values() if t)
-        print(f"[TrailerWorker] resolved {found}/{len(resolved)} trailers")
+        log.info(f"[TrailerWorker] resolved {found}/{len(resolved)} trailers")
         self.trailers_ready.emit(resolved)

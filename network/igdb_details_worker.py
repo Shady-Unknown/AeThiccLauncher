@@ -6,6 +6,7 @@ Una sola richiesta per gioco, con i campi "editoriali" che non stanno in
 igdb_meta (summary, aziende, piattaforme, screenshot). Il risultato viene
 salvato in managers.igdb_details_cache, non nel master catalog.
 """
+import logging
 import re
 import time
 
@@ -13,6 +14,8 @@ import requests
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from network.igdb_worker import IGDB_BASE, IGDBWorker
+
+log = logging.getLogger(__name__)
 
 DETAIL_FIELDS = (
     "fields name,summary,storyline,aggregated_rating,total_rating,rating_count,"
@@ -208,12 +211,12 @@ class IGDBDetailsWorker(QThread):
             r = requests.post(f"{IGDB_BASE}/games", headers=headers,
                               data=body, timeout=12)
             if r.status_code != 200:
-                print(f"[IGDBDetails] query status {r.status_code} for '{self._title}'")
+                log.info(f"[IGDBDetails] query status {r.status_code} for '{self._title}'")
                 return []
             games = r.json() or []
             return [g for g in games if isinstance(g, dict)]
         except Exception as e:
-            print(f"[IGDBDetails] error for '{self._title}': {e}")
+            log.exception(f"[IGDBDetails] error for '{self._title}': {e}")
             return []
 
     def _search_best(self, headers):

@@ -18,10 +18,39 @@ _T0 = time.monotonic()
 
 def _phase(label):
     elapsed = (time.monotonic() - _T0) * 1000.0
-    message = f"[STARTUP] {label}: {elapsed:.0f}ms"
-    print(message)
     try:
-        logging.getLogger("startup").info(message)
+        logging.getLogger("startup").info("[STARTUP] %s: %.0fms", label, elapsed)
+    except Exception:
+        pass
+
+
+def _want_dev_console() -> bool:
+    return ("--console" in sys.argv
+            or os.environ.get("AETHICC_CONSOLE", "").strip().lower()
+            in ("1", "true", "yes", "on"))
+
+
+def _strip_console_flag() -> None:
+    while "--console" in sys.argv:
+        sys.argv.remove("--console")
+
+
+def _attach_windows_console() -> None:
+    """Open a console on demand for a --noconsole Windows build."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        if not kernel32.AttachConsole(-1):
+            kernel32.AllocConsole()
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        try:
+            sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
+        except OSError:
+            pass
     except Exception:
         pass
 
@@ -44,13 +73,24 @@ def _log_unhandled_exception(exc_type, exc, tb):
             traceback.print_exception(exc_type, exc, tb, file=f)
     except Exception:
         pass
+    try:
+        logging.getLogger("crash").critical(
+            "Uncaught exception", exc_info=(exc_type, exc, tb))
+    except Exception:
+        pass
     sys.__excepthook__(exc_type, exc, tb)
 
 
 sys.excepthook = _log_unhandled_exception
 
+# Console mode must be decided before logging_setup captures the real streams.
+_want_console = _want_dev_console()
+_strip_console_flag()
+if _want_console:
+    _attach_windows_console()
+
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLabel, QDialog,
+    QApplication, QWidget, QVBoxLayout, QLabel, QDialog, QMessageBox,
     QProxyStyle, QStyle,
 )
 from PyQt6.QtGui import QIcon, QPixmap, QFontDatabase
@@ -60,15 +100,28 @@ from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.config import get_base_dir, load_config
-from core.logging_setup import setup_logging
+from core.logging_setup import (
+    install_print_bridge,
+    install_qt_message_handler,
+    setup_logging,
+)
 from core import data_files
+from core.paths import PathManager
+from core.single_instance import SingleInstanceLock
 from core.version import __version__
 
-setup_logging()
-logging.getLogger("startup").info("[STARTUP] Ae Thicc Launcher %s", __version__)
+_console = _want_console or not getattr(sys, "frozen", False)
+setup_logging(console=_console)
+install_print_bridge()
+install_qt_message_handler()
+logging.getLogger("startup").info(
+    "[STARTUP] Ae Thicc Launcher %s (console=%s)", __version__, _console)
 _phase("imports + logging ready")
 
+from core.master_catalog import CatalogCorruptionError
 from ui.main_window import AppWindow
+
+log = logging.getLogger(__name__)
 
 
 class _AbsoluteScrollBarStyle(QProxyStyle):
@@ -139,7 +192,7 @@ def _run_onboarding(config) -> bool:
             setup_logging()
         return True
     except Exception as exc:
-        print(f"[Startup] onboarding wizard failed: {exc}")
+        log.exception(f"[Startup] onboarding wizard failed: {exc}")
         return False
 
 
@@ -203,6 +256,10 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle(_AbsoluteScrollBarStyle(app.style()))
     app.setApplicationName("AeThiccLauncher")
+    # Teardown hides the window while workers drain, so the window closing
+    # must not end the process by itself: the final shutdown stage calls
+    # QApplication.quit() once no worker is running.
+    app.setQuitOnLastWindowClosed(False)
     if sys.platform.startswith("linux"):
         # Wayland takes the window/taskbar icon from the .desktop entry that
         # matches this app id, so setWindowIcon() alone is not enough.
@@ -215,9 +272,9 @@ if __name__ == "__main__":
     if os.path.exists(emoji_font):
         font_id = QFontDatabase.addApplicationFont(emoji_font)
         if font_id < 0:
-            print(f"[Fonts] Could not load the emoji font: {emoji_font}")
+            log.info(f"[Fonts] Could not load the emoji font: {emoji_font}")
     else:
-        print(f"[Fonts] Emoji font missing: {emoji_font}")
+        log.info(f"[Fonts] Emoji font missing: {emoji_font}")
     if sys.platform.startswith("linux"):
         # COLRv1 colour emoji (the Noto Color Emoji packaged by Fedora/Nobara)
         # is not rasterised by Qt 6.11, so ship a COLRv0 colour font it can
@@ -227,9 +284,9 @@ if __name__ == "__main__":
         if os.path.exists(colour_font):
             font_id = QFontDatabase.addApplicationFont(colour_font)
             if font_id < 0:
-                print(f"[Fonts] Could not load the colour emoji font: {colour_font}")
+                log.info(f"[Fonts] Could not load the colour emoji font: {colour_font}")
         else:
-            print(f"[Fonts] Colour emoji font missing: {colour_font}")
+            log.info(f"[Fonts] Colour emoji font missing: {colour_font}")
     _phase("fonts loaded")
 
     # Usiamo get_base_dir() per avere un percorso affidabile sia da script che da exe compilato
@@ -244,6 +301,17 @@ if __name__ == "__main__":
         app_icon = QIcon(icon_path)
         app.setWindowIcon(app_icon)
 
+    # --- SINGLE INSTANCE (same data root -> one launcher only) ---
+    instance_lock = SingleInstanceLock(
+        SingleInstanceLock.path_for_data_root(PathManager.get_data_root()))
+    if not instance_lock.acquire():
+        QMessageBox.warning(
+            None, "Ae Thicc Launcher",
+            "Another Ae Thicc Launcher instance is already running.\n\n"
+            "Close it before starting a new one.",
+        )
+        sys.exit(1)
+
     # --- FIRST RUN SETUP (prima della finestra: i percorsi devono essere già corretti) ---
     onboarded = _run_onboarding(load_config())
     _phase("onboarding check done")
@@ -252,10 +320,10 @@ if __name__ == "__main__":
     try:
         copied, kept = data_files.ensure_user_data()
         if copied:
-            print(f"[DataFiles] Seeded {copied} file(s) into {data_files.user_root()}")
+            log.info(f"[DataFiles] Seeded {copied} file(s) into {data_files.user_root()}")
         _phase(f"data seed done (copied={copied}, kept={kept})")
     except Exception as exc:
-        print(f"[DataFiles] seed failed: {exc}")
+        log.exception(f"[DataFiles] seed failed: {exc}")
 
     # --- SPLASH SCREEN ---
     splash_path = os.path.join(get_base_dir(), ".media", "SplashScreen.png")
@@ -270,7 +338,20 @@ if __name__ == "__main__":
             app.processEvents()
 
     splash_start = time.monotonic()
-    window = AppWindow()
+    try:
+        window = AppWindow()
+    except CatalogCorruptionError as exc:
+        if splash is not None:
+            splash.close()
+        message = str(exc)
+        try:
+            from core.paths import PathManager
+
+            message += f"\n\nLogs: {PathManager.get_logs_dir()}"
+        except Exception:
+            pass
+        QMessageBox.critical(None, "Ae Thicc Launcher", message)
+        sys.exit(1)
     # Evita che il check a 3s riproponga subito il wizard già mostrato.
     window._onboarding_prompted = onboarded
     _phase("AppWindow built")
@@ -298,5 +379,13 @@ if __name__ == "__main__":
             show_and_fade()
     else:
         _reveal()
+
+    app.aboutToQuit.connect(window.on_about_to_quit)
+
+    # Test-only hook used by the shutdown smoke test: close the window after N
+    # milliseconds. No effect unless the environment variable is set.
+    smoke_ms = os.environ.get("AETHICC_SMOKE_QUIT_MS", "")
+    if smoke_ms.isdigit():
+        QTimer.singleShot(int(smoke_ms), window.close)
 
     sys.exit(app.exec())

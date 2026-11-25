@@ -5,7 +5,10 @@ Properties:
 - a truncated/corrupt last line (crash) is skipped on load;
 - every record carries ``v`` (schema), ``id`` (uuid) and ``at`` (epoch);
 - ``merge`` deduplicates by ``id`` so backup restores are idempotent;
-- ``rewrite`` is atomic (``tmp`` + ``os.replace``).
+- ``rewrite`` is atomic (``tmp`` + ``os.replace``);
+- ``load`` is cached by file fingerprint (writes, size, mtime) and a cached
+  load is O(1); the returned list is a copy, but its record dicts are shared,
+  so callers must copy a record before mutating it.
 """
 from __future__ import annotations
 
@@ -21,8 +24,31 @@ class JsonlStore:
     def __init__(self, path, schema_version: int = 1):
         self.path = Path(path)
         self.schema_version = int(schema_version)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._writes = 0
+        self._cache: list[dict] | None = None
+        self._cache_fingerprint = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- state ---------------------------------------------------------
+
+    def fingerprint(self) -> tuple:
+        """Token that changes when the file content may have changed.
+
+        ``_writes`` catches our own writes even when size and mtime collide;
+        size and mtime catch a restore or another process touching the file.
+        """
+        with self._lock:
+            try:
+                stat = self.path.stat()
+            except OSError:
+                return (self._writes, 0, 0)
+            return (self._writes, stat.st_size, stat.st_mtime_ns)
+
+    def _invalidate_cache(self) -> None:
+        self._writes += 1
+        self._cache = None
+        self._cache_fingerprint = None
 
     # --- write ---------------------------------------------------------
 
@@ -44,6 +70,7 @@ class JsonlStore:
                 fh.flush()
                 if fsync:
                     os.fsync(fh.fileno())
+            self._invalidate_cache()
         return data
 
     def append_many(self, records, fsync: bool = False) -> list[dict]:
@@ -60,6 +87,7 @@ class JsonlStore:
                 fh.flush()
                 if fsync:
                     os.fsync(fh.fileno())
+            self._invalidate_cache()
         return data
 
     def rewrite(self, records) -> int:
@@ -72,13 +100,12 @@ class JsonlStore:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, self.path)
+            self._invalidate_cache()
         return len(data)
 
     # --- read ----------------------------------------------------------
 
-    def load(self) -> list[dict]:
-        if not self.path.exists():
-            return []
+    def _read_file(self) -> list[dict]:
         records: list[dict] = []
         with self.path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -94,6 +121,21 @@ class JsonlStore:
                 if isinstance(record, dict):
                     records.append(record)
         return records
+
+    def load(self) -> list[dict]:
+        """Parsed records, cached until a write or an external change."""
+        with self._lock:
+            if not self.path.exists():
+                self._cache = []
+                self._cache_fingerprint = self.fingerprint()
+                return []
+            fingerprint = self.fingerprint()
+            if self._cache is not None and self._cache_fingerprint == fingerprint:
+                return list(self._cache)
+            records = self._read_file()
+            self._cache = records
+            self._cache_fingerprint = self.fingerprint()
+            return list(records)
 
     def ids(self) -> set:
         return {record.get("id") for record in self.load() if record.get("id")}

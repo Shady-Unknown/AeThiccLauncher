@@ -18,12 +18,15 @@ Il sito espone i dati in attributi e classi stabili:
 Per il "Steam Latest" in refresh usiamo il mirror pubblico SteamCMD
 (api.steamcmd.net), che restituisce lo stesso buildid del sito.
 """
+import logging
 import re
 from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 
 from core.game_version import normalize_label
+
+log = logging.getLogger(__name__)
 
 
 MONTHS = (
@@ -237,7 +240,7 @@ def fetch_steam_latest_build(app_id, timeout=5):
             "date": format_timestamp(timestamp) if timestamp else "",
         }
     except Exception as e:
-        print(f"[VersionStatus] SteamCMD refresh failed for {app_id}: {e}")
+        log.exception(f"[VersionStatus] SteamCMD refresh failed for {app_id}: {e}")
         return None
 
 

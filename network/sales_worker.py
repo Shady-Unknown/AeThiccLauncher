@@ -1,9 +1,12 @@
+import logging
 import re
 import requests
 from urllib.parse import quote
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.price_utils import detect_currency, parse_price_to_cents
+
+log = logging.getLogger(__name__)
 
 
 class SalesWorker(QThread):
@@ -67,7 +70,7 @@ class SalesWorker(QThread):
                 "region": self.region,
             }
         except Exception as e:
-            print(f"[SalesWorker] Steam API error: {e}")
+            log.exception(f"[SalesWorker] Steam API error: {e}")
             return None
 
     def _query_steam_by_search(self):
@@ -98,7 +101,7 @@ class SalesWorker(QThread):
                 "final_price": ""
             }
         except Exception as e:
-            print(f"[SalesWorker] Steam search error: {e}")
+            log.exception(f"[SalesWorker] Steam search error: {e}")
             return None
 
     def _query_gog(self):
@@ -179,7 +182,7 @@ class SalesWorker(QThread):
                 "region": self.region,
             }
         except Exception as e:
-            print(f"[SalesWorker] GOG error: {e}")
+            log.exception(f"[SalesWorker] GOG error: {e}")
             return None
 
     def run(self):

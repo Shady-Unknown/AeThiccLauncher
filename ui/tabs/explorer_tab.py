@@ -11,9 +11,14 @@ from PyQt6.QtWidgets import (QCompleter, QFrame, QGraphicsDropShadowEffect,
                              QSizePolicy, QSplitter, QTextEdit, QVBoxLayout,
                              QWidget)
 
+from PyQt6.QtWebEngineCore import QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
+from core.cache_limits import trim_mapping
 from core.config import get_base_dir
+from core.task_registry import TaskRegistry
+
+BG_PATH_LIMIT = 64
 from network.featured_image_worker import FeaturedImageWorker
 from ui.widgets.blur_background import BlurredBackground
 from ui.widgets.glass import (STATE_DEFAULT, accent_for, css_rgba,
@@ -710,6 +715,9 @@ class ExplorerTab(QWidget):
         )
 
         self.cover_image = QWebEngineView()
+        media_profile = getattr(self.mw, "media_profile", None)
+        if media_profile is not None:
+            self.cover_image.setPage(QWebEnginePage(media_profile, self.cover_image))
         self.cover_image.setFixedSize(COVER_W, COVER_H)
         # Il menu contestuale Chromium (Back/Forward/Save page...) non serve
         # sulla copertina e userebbe uno stile diverso dal resto.
@@ -1101,6 +1109,9 @@ class ExplorerTab(QWidget):
         )
         worker.finished.connect(lambda w=worker: self._cleanup_bg_worker(w))
         self._bg_workers.append(worker)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
         worker.start()
 
     def _on_background_ready(self, token, url, path):
@@ -1109,6 +1120,7 @@ class ExplorerTab(QWidget):
             return
         if url and path:
             self._bg_paths[url] = path
+            trim_mapping(self._bg_paths, BG_PATH_LIMIT)
         self.bg_layer.set_source(path or None)
 
     def _cleanup_bg_worker(self, worker):
@@ -1169,6 +1181,19 @@ class ExplorerTab(QWidget):
             return
         header = int(total * 0.62)
         self.v_splitter.setSizes([header, max(1, total - header)])
+
+    def release_webengine(self):
+        """Destroy the cover page before the shared media profile is deleted."""
+        view = getattr(self, "cover_image", None)
+        if view is None:
+            return
+        try:
+            view.stop()
+            view.setPage(None)  # PyQt deletes the previous page
+            view.deleteLater()
+        except RuntimeError:
+            pass
+        self.cover_image = None
 
     def _apply_rail_metrics(self):
         """Cover e rail seguono l'altezza del blocco header."""

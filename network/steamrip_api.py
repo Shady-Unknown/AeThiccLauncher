@@ -10,6 +10,7 @@ Fornisce:
 Nota: i titoli REST sono HTML-escaped e includono "Free Download (vX)":
 vengono normalizzati con html.unescape + strip_title.
 """
+import logging
 import html
 import re
 import threading
@@ -20,6 +21,9 @@ from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 from core.meta_utils import strip_title
+from network.featured_image import featured_image_url
+
+log = logging.getLogger(__name__)
 
 BASE = "https://steamrip.com"
 WP_API = f"{BASE}/wp-json/wp/v2"
@@ -83,7 +87,7 @@ def _rest_get(params, timeout=15):
         if last_response.status_code != 429:
             return last_response
         delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
-        print(f"[SteamRipAPI] 429 rate-limit, retry in {delay:.0f}s")
+        log.info(f"[SteamRipAPI] 429 rate-limit, retry in {delay:.0f}s")
         time.sleep(delay)
     return last_response
 
@@ -121,24 +125,9 @@ def fetch_page_cover(page_url, timeout=10):
         if r.status_code != 200 or not r.text:
             return ""
         soup = BeautifulSoup(r.text, "lxml")
-        img = soup.find("figure", class_="single-featured-image")
-        img = img.find("img") if img else None
-        if img is None:
-            img = soup.find("img", class_="wp-post-image")
-        if img is None:
-            return ""
-        url = (img.get("data-src") or img.get("data-lazy-src")
-               or img.get("src") or "").strip()
-        if url.startswith("data:"):
-            # lazy placeholder: prova con la srcset / data-src
-            url = (img.get("data-src") or img.get("data-lazy-src") or "").strip()
-        if url.startswith("//"):
-            url = "https:" + url
-        elif url.startswith("/"):
-            url = BASE + url
-        return url
+        return featured_image_url(soup)
     except Exception as e:
-        print(f"[SteamRipAPI] page cover error for {page_url}: {e}")
+        log.exception(f"[SteamRipAPI] page cover error for {page_url}: {e}")
         return ""
 
 
@@ -261,7 +250,7 @@ class SteamRipPostsWorker(QThread):
             normalized = [normalize_post(p) for p in posts]
             self.page_ready.emit(self.key, normalized, self.page, total_pages)
         except Exception as e:
-            print(f"[SteamRipAPI] page {self.page} error for '{self.key}': {e}")
+            log.exception(f"[SteamRipAPI] page {self.page} error for '{self.key}': {e}")
             self.error.emit(self.key, str(e))
 
 
@@ -282,7 +271,7 @@ class SteamRipUpdatesWorker(QThread):
         try:
             entries = fetch_updated_games()
         except Exception as e:
-            print(f"[SteamRipAPI] updates page error: {e}")
+            log.exception(f"[SteamRipAPI] updates page error: {e}")
             self.error.emit(str(e))
             return
         if self._stop_flag:
@@ -321,7 +310,7 @@ class SteamRipBatchWorker(QThread):
                 self.page_ready.emit(key, [normalize_post(p) for p in posts],
                                      page, total_pages)
             except Exception as e:
-                print(f"[SteamRipAPI] batch error for '{key}': {e}")
+                log.exception(f"[SteamRipAPI] batch error for '{key}': {e}")
                 self.error.emit(key, str(e))
             _QThread.msleep(int(REQUEST_DELAY_SECONDS * 1000))
 
@@ -352,8 +341,8 @@ class SteamRipIndexWorker(QThread):
                     url = (post.get("link") or "").rstrip("/")
                     if url:
                         index[url] = post.get("categories") or []
-                print(f"[SteamRipAPI] index page {page}/{total_pages} ({len(index)}/{total})")
+                log.info(f"[SteamRipAPI] index page {page}/{total_pages} ({len(index)}/{total})")
                 page += 1
             self.index_ready.emit(index)
         except Exception as e:
-            print(f"[SteamRipAPI] index error: {e}")
+            log.exception(f"[SteamRipAPI] index error: {e}")

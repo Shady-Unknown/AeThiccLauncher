@@ -11,77 +11,115 @@ permissions:
 
 jobs:
   # ==========================================
+  # 0. TESTS (release gate)
+  # ==========================================
+  tests:
+    if: startsWith(github.event.head_commit.message, 'Release_')
+    uses: ./.github/workflows/tests.yml
+
+
+  # ==========================================
+  # 0b. RELEASE PREFLIGHT (exact version + tag)
+  # ==========================================
+  preflight:
+    if: startsWith(github.event.head_commit.message, 'Release_')
+    needs: tests
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.10'
+
+      - name: Validate release inputs and tag
+        id: version
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          python verify_release.py --require-release --commit-message "$COMMIT_MSG"
+          VERSION=$(python verify_release.py --print-version)
+          python verify_release.py --tag "v$VERSION" --remote origin --require-remote
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  # ==========================================
   # 1. BUILD WINDOWS (.exe e zip)
   # ==========================================
   build-windows:
     # Esegue il job SOLO se il messaggio del commit inizia con "Release_"
     if: startsWith(github.event.head_commit.message, 'Release_')
-    runs-on: windows-latest
+    needs: [tests, preflight]
+    runs-on: windows-2025
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11' # Assicurati che combaci con la tua versione
+          python-version: '3.12.10'
 
       - name: Prepare Virtual Environment
         # Creiamo un finto .venv per soddisfare il blocco di sicurezza del tuo build_win.ps1
         run: |
           python -m venv .venv
           .\.venv\Scripts\Activate.ps1
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install -r requirements-build.txt
 
       - name: Compile using build_win.ps1
         run: |
           .\.venv\Scripts\Activate.ps1
           .\build_win.ps1
 
+      - name: Validate Windows artifacts
+        run: python verify_release.py --platform windows --artifacts-dir dist --require-sums
+
       - name: Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-build
           path: |
             dist/Ae_Thicc_Launcher_Windows_*.zip
             dist/Ae_Thicc_Launcher_Setup_*.exe
+            dist/SHA256SUMS.txt
           retention-days: 1
   # ==========================================
-  # 2. BUILD LINUX (Flatpak su Fedora 38)
+  # 2. BUILD LINUX (Flatpak from Bookworm)
   # ==========================================
   build-flatpak:
     if: startsWith(github.event.head_commit.message, 'Release_')
-    runs-on: ubuntu-latest
-    # Diciamo a GitHub di far girare questo job dentro un container Fedora 38
+    needs: [tests, preflight]
+    runs-on: ubuntu-24.04
+    # Bookworm: Python 3.12 and an older glibc than the Flatpak runtime
     container:
-      image: fedora:38
+      image: python:3.12-slim-bookworm
       options: --privileged
     steps:
-      - name: Pre-install Git and System Deps
-        # Aggiungiamo le librerie di base che servono a PyQt6 durante la compilazione
-        run: dnf install -y git nodejs python3 python3-pip mesa-libGL glib2-devel nss binutils
+      - name: Pre-install system libraries
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git flatpak flatpak-builder \
+            libgl1 libegl1 libnss3 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Setup Python Environment & Compile Linux Binary
-        # Installiamo le librerie e usiamo PyInstaller direttamente su Linux
+      - name: Compile Linux binary from the shared spec
         run: |
-          pip3 install -r requirements.txt
-          pip3 install pyinstaller
-          pyinstaller --noconsole --onefile --clean --name AeThiccLauncher \
-            --collect-all "curl_cffi" \
-            --collect-all "certifi" \
-            --collect-all "keyring" \
-            --collect-all "secretstorage" \
-            --hidden-import "PyQt6.QtWebEngineWidgets" \
-            --hidden-import "PyQt6.QtWebEngineCore" \
-            main.py
-          # Spostiamo il file compilato dalla cartella dist/ alla root
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          AETHICC_BUILD_MODE=onefile AETHICC_APP_NAME=AeThiccLauncher \
+            python -m PyInstaller --clean --noconfirm Ae_Thicc_Launcher.spec
           cp dist/AeThiccLauncher aethicc-flatpak/AeThiccLauncher
-          # `cp -r src dest` nests into an existing dest: wipe first so a stale
-          # .media (missing icons/, fonts) can never reach the bundle.
           rm -rf aethicc-flatpak/.media aethicc-flatpak/bin aethicc-flatpak/data aethicc-flatpak/lists
           cp -r .media aethicc-flatpak/.media
           cp -r bin aethicc-flatpak/bin
@@ -89,56 +127,56 @@ jobs:
           cp -r data/. aethicc-flatpak/data/
           cp -r lists aethicc-flatpak/lists
 
-      - name: Setup Flatpak Environment
-        run: |
-          dnf install -y flatpak flatpak-builder
-          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-
       - name: Build and Bundle Flatpak
         run: |
           flatpak-builder --repo=repo build-dir aethicc-flatpak/com.MJK.AeThiccLauncher.yml --force-clean --install-deps-from=flathub
           flatpak build-bundle repo Ae_Thicc_Launcher_Linux.flatpak com.MJK.AeThiccLauncher
+          sha256sum Ae_Thicc_Launcher_Linux.flatpak > SHA256SUMS.txt
+
+      - name: Validate Linux artifact
+        run: python verify_release.py --platform linux --artifacts-dir . --require-sums
 
       - name: Upload Flatpak Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flatpak-build
-          path: Ae_Thicc_Launcher_Linux.flatpak
+          path: |
+            Ae_Thicc_Launcher_Linux.flatpak
+            SHA256SUMS.txt
           retention-days: 1
-          
+
   # ==========================================
   # 3. PUBLISH RELEASE AL REPO PUBBLICO
   # ==========================================
   publish-release:
     # Aspetta che Windows e Linux abbiano finito la compilazione
-    needs: [build-windows, build-flatpak]
-    runs-on: ubuntu-latest
+    needs: [preflight, build-windows, build-flatpak]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download Windows Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: windows-build
+          path: win
 
       - name: Download Flatpak Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: flatpak-build
+          path: linux
 
-      - name: Extract Version from Commit Message
-        id: get_version
+      - name: Assemble artifacts and checksums
         run: |
-          # Estrapola solo la versione semantica dopo "Release_" (maiuscole/minuscole
-          # indifferenti): un suffisso tipo "Release_1.9.5: note" non deve finire
-          # dentro il tag. Il messaggio arriva via env: interpolarlo nel bash si
-          # rompe con le virgolette.
-          VERSION=$(printf '%s' "$COMMIT_MSG" | grep -ioP '(?<=Release_)\d+\.\d+\.\d+' | head -n 1 || true)
-          if [ -z "$VERSION" ]; then VERSION="latest"; fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-        env:
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          cp win/Ae_Thicc_Launcher_Windows_*.zip .
+          cp win/Ae_Thicc_Launcher_Setup_*.exe .
+          cp linux/Ae_Thicc_Launcher_Linux.flatpak .
+          cat win/SHA256SUMS.txt linux/SHA256SUMS.txt > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Extract changelog section
         run: |
@@ -161,8 +199,13 @@ jobs:
           print(body[:300])
           PY
 
+      - name: Verify the complete release
+        run: |
+          python verify_release.py --platform all --artifacts-dir . --generate-sums --require-sums
+          cat SHA256SUMS.txt
+
       - name: Push Release to Public Repo
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ env.VERSION }}
           name: "Ae Thicc Launcher v${{ env.VERSION }}"
@@ -171,3 +214,4 @@ jobs:
             Ae_Thicc_Launcher_Windows_*.zip
             Ae_Thicc_Launcher_Setup_*.exe
             Ae_Thicc_Launcher_Linux.flatpak
+            SHA256SUMS.txt

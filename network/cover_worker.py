@@ -1,3 +1,4 @@
+import logging
 import io
 import os
 import threading
@@ -11,9 +12,12 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.mini_cover_cache import MiniCoverManager, MINI_W, MINI_H
 from core.cover_cache import to_file_url
+from core.http_utils import fetch_image_bytes
 from core import secrets
-from managers.save_manager import safe_game_folder_name
+from core.naming import safe_game_folder_name
 from network.steamrip_api import fetch_page_cover
+
+log = logging.getLogger(__name__)
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -132,7 +136,7 @@ class CoverWorker(QThread):
                     try:
                         fut.result()
                     except Exception as e:
-                        print(f"[CoverWorker] error for '{job.get('title')}': {e}")
+                        log.exception(f"[CoverWorker] error for '{job.get('title')}': {e}")
                         with self._lock:
                             self._resolved.add(job.get("title"))
 
@@ -359,7 +363,7 @@ class CoverWorker(QThread):
                 if isinstance(data, list) and data:
                     return data[0].get("url")
         except Exception as e:
-            print(f"[CoverWorker] SGDB error for '{appid}': {e}")
+            log.exception(f"[CoverWorker] SGDB error for '{appid}': {e}")
         return None
 
     # â”€â”€ download + persist into the MiniCover cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -372,14 +376,14 @@ class CoverWorker(QThread):
 
     def _fetch(self, url):
         url = self._ensure_https(url)
+        data = fetch_image_bytes(url, user_agent=UA, timeout=12)
+        if not data:
+            return None
         try:
-            r = requests.get(url, headers={"User-Agent": UA}, timeout=12)
-            if r.status_code != 200:
-                return None
-            img = Image.open(io.BytesIO(r.content))
+            img = Image.open(io.BytesIO(data))
             return img.convert("RGB")
         except Exception as e:
-            print(f"[CoverWorker] fetch failed for '{url}': {e}")
+            log.exception(f"[CoverWorker] fetch failed for '{url}': {e}")
             return None
 
     def _persist(self, title, img):
@@ -391,7 +395,7 @@ class CoverWorker(QThread):
             img.save(path, "JPEG", quality=85)
             return to_file_url(path)
         except Exception as e:
-            print(f"[CoverWorker] persist failed for '{title}': {e}")
+            log.exception(f"[CoverWorker] persist failed for '{title}': {e}")
             return None
 
     def _download(self, url, title):

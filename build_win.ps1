@@ -17,6 +17,15 @@ if (-not $VenvPath) {
 }
 $Python = Join-Path $VenvPath "Scripts\python.exe"
 
+$PyVersion = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+if ($PyVersion -ne "3.12") {
+    Write-Host "ERRORE: la build richiede Python 3.12 (trovato '$PyVersion')." -ForegroundColor Red
+    exit 1
+}
+$env:SOURCE_DATE_EPOCH = (& git log -1 --format=%ct 2>$null | Select-Object -First 1)
+if (-not $env:SOURCE_DATE_EPOCH) { $env:SOURCE_DATE_EPOCH = "0" }
+Write-Host "SOURCE_DATE_EPOCH: $env:SOURCE_DATE_EPOCH" -ForegroundColor Gray
+
 # Versione applicazione: unica fonte in core/version.py
 $Version = (& $Python -c "from core.version import __version__; print(__version__)" 2>$null | Select-Object -First 1)
 if ($Version) { $Version = $Version.Trim() }
@@ -36,8 +45,7 @@ if (-not $ChangelogHasVersion) {
 }
 
 Write-Host "Verifica dipendenze..." -ForegroundColor Gray
-& $Python -m pip install -r requirements.txt --quiet
-& $Python -m pip install pyinstaller --quiet
+& $Python -m pip install -r requirements-build.txt --quiet
 
 # 1. Pulizia build precedenti
 Write-Host "Pulizia vecchi file..." -ForegroundColor Gray
@@ -48,13 +56,9 @@ if (Test-Path "$ExeName.spec") { Remove-Item -Force "$ExeName.spec" }
 # 2. Esecuzione PyInstaller — onedir: niente estrazione del bundle a ogni avvio,
 #    avvio molto più rapido e meno falsi positivi degli antivirus.
 Write-Host "Generazione eseguibile in corso (Onedir, No Console)..." -ForegroundColor Yellow
-& $Python -m PyInstaller --noconsole --onedir --clean --name $ExeName `
-    --icon=".media\icon.ico" `
-    --collect-all "curl_cffi" `
-    --collect-all "keyring" `
-    --hidden-import "PyQt6.QtWebEngineWidgets" `
-    --hidden-import "PyQt6.QtWebEngineCore" `
-    main.py
+$env:AETHICC_BUILD_MODE = "onedir"
+$env:AETHICC_APP_NAME = $ExeName
+& $Python -m PyInstaller --clean --noconfirm Ae_Thicc_Launcher.spec
 
 $DistRoot = "dist"
 $DistDir = Join-Path $DistRoot $ExeName
@@ -141,7 +145,9 @@ function Find-Iscc {
 $IsccPath = Find-Iscc
 if ($IsccPath) {
     if (Test-Path "installer.iss") {
-        Write-Host "Compilazione installer Inno Setup ($IsccPath)..." -ForegroundColor Yellow
+        $IsccVersion = (Get-Item $IsccPath).VersionInfo.ProductVersion
+        Write-Host "Inno Setup: $IsccVersion ($IsccPath)" -ForegroundColor Gray
+        Write-Host "Compilazione installer Inno Setup..." -ForegroundColor Yellow
         & $IsccPath "/DAppVersion=$Version" "installer.iss"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERRORE: Inno Setup ha restituito codice $LASTEXITCODE" -ForegroundColor Red
@@ -159,10 +165,22 @@ if ($IsccPath) {
     Write-Host "   Se e' gia' installato, verifica C:\Program Files (x86)\Inno Setup 6\ISCC.exe" -ForegroundColor Gray
 }
 
+$SetupPath = Join-Path $DistRoot "${ExeName}_Setup_${Version}.exe"
+$Artifacts = @($ZipPath, $SetupPath) | Where-Object { Test-Path $_ }
+if ($Artifacts.Count -gt 0) {
+    $Sums = Join-Path $DistRoot "SHA256SUMS.txt"
+    $Lines = foreach ($file in $Artifacts) {
+        $hash = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLower()
+        "$hash  $(Split-Path $file -Leaf)"
+    }
+    Set-Content -Path $Sums -Value $Lines -Encoding ascii
+    Write-Host "   -> $Sums" -ForegroundColor Gray
+}
+& $Python verify_release.py --platform windows --artifacts-dir $DistRoot --require-sums
+
 Write-Host "Build completata con successo!" -ForegroundColor Green
 Write-Host "   Cartella: $DistDir" -ForegroundColor Green
 Write-Host "   Zip:      $ZipPath" -ForegroundColor Green
-$SetupPath = Join-Path $DistRoot "${ExeName}_Setup_${Version}.exe"
 if (Test-Path $SetupPath) {
     Write-Host "   Setup:    $SetupPath" -ForegroundColor Green
 }

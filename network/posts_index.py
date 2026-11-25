@@ -15,6 +15,7 @@ Flusso:
 In sviluppo (non congelato) il download completo scrive anche lo snapshot in
 `data/`, cosi' basta avviare l'app una volta per aggiornarlo.
 """
+import logging
 import json
 import os
 import shutil
@@ -25,9 +26,12 @@ from datetime import datetime, timedelta, timezone
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.atomic_io import atomic_write_json
 from core.data_files import bundled_path as _bundled_path
 from core.paths import PathManager
 from network.steamrip_api import _rest_get, normalize_post
+
+log = logging.getLogger(__name__)
 
 INDEX_FILENAME = "steamrip_posts_index.json"
 SCHEMA_VERSION = 1
@@ -92,20 +96,11 @@ def _read_index(path):
 
 
 def _write_index(path, data):
-    tmp = path + ".tmp"
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, separators=(",", ":"), ensure_ascii=False)
-        os.replace(tmp, path)
+        atomic_write_json(path, data, separators=(",", ":"), fsync=False)
         return True
     except Exception as e:
-        print(f"[PostsIndex] save error: {e}")
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+        log.exception(f"[PostsIndex] save error: {e}")
         return False
 
 
@@ -143,7 +138,7 @@ class PostsIndexWorker(QThread):
             _write_index(dest_path(), data)
             self.ready.emit(data)
         except Exception as e:
-            print(f"[PostsIndex] error: {e}")
+            log.exception(f"[PostsIndex] error: {e}")
             self.failed.emit(str(e))
 
     # ── seed / load ─────────────────────────────────────────────────
@@ -161,7 +156,7 @@ class PostsIndexWorker(QThread):
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.copy2(bundle, dest)
             except Exception as e:
-                print(f"[PostsIndex] copy seed failed: {e}")
+                log.exception(f"[PostsIndex] copy seed failed: {e}")
             return seeded
 
         if local is not None and seeded is not None:
@@ -172,7 +167,7 @@ class PostsIndexWorker(QThread):
                 try:
                     shutil.copy2(bundle, dest)
                 except Exception as e:
-                    print(f"[PostsIndex] copy newer seed failed: {e}")
+                    log.exception(f"[PostsIndex] copy newer seed failed: {e}")
                 return seeded
 
         return local if local is not None else _empty_index()
@@ -194,22 +189,20 @@ class PostsIndexWorker(QThread):
             or (datetime.now(timezone.utc) - full_at) > timedelta(days=FULL_RESYNC_DAYS)
         )
         if need_full:
-            fresh = self._full_download()
-            if fresh is None:
-                return data if posts else None
-            return fresh
+            # A failed/interrupted full sync must not be written back as the
+            # current index: the partial file is what the next run resumes.
+            return self._full_download()
 
         watermark = self._watermark(posts)
         if watermark is None:
-            fresh = self._full_download()
-            return fresh if fresh is not None else data
+            return self._full_download()
 
         since = (watermark - DELTA_OVERLAP).strftime("%Y-%m-%dT%H:%M:%S")
         delta = self._delta_download(since)
         if delta:
             posts.update(delta)
             data["generated_at"] = _now_iso()
-            print(f"[PostsIndex] {len(delta)} post aggiornati ({len(posts)} totali)")
+            log.info(f"[PostsIndex] {len(delta)} post aggiornati ({len(posts)} totali)")
         return data
 
     @staticmethod
@@ -230,19 +223,27 @@ class PostsIndexWorker(QThread):
         if r is None:
             return None
         if r.status_code != 200:
-            print(f"[PostsIndex] REST status {r.status_code}")
+            log.info(f"[PostsIndex] REST status {r.status_code}")
             return None
         try:
             return r.json() or []
         except Exception:
             return None
 
+    def _save_partial(self, dest, data, page, posts):
+        data["schema"] = SCHEMA_VERSION
+        data["partial_page"] = page
+        data["posts"] = posts
+        _write_index(dest, data)
+        log.info(f"[PostsIndex] download interrotto a pagina {page} "
+                 f"({len(posts)} post salvati)")
+
     def _full_download(self):
         dest = dest_path()
         data = _read_index(dest) or _empty_index()
         posts = data.setdefault("posts", {})
         page = int(data.pop("partial_page", 1) or 1)
-        total_pages = 0
+        completed = True
 
         while True:
             self.progress.emit(f"Scarico l'indice dei giochi… pagina {page}")
@@ -262,16 +263,17 @@ class PostsIndexWorker(QThread):
                 if self._stop.wait(wait):
                     break
 
-            if batch is None and not self._stop.is_set():
-                # Salva il parziale: al prossimo avvio riprende da qui.
-                data["partial_page"] = page
-                _write_index(dest, data)
-                print(f"[PostsIndex] download interrotto a pagina {page} "
-                      f"({len(posts)} post salvati)")
-                return None
-
-            if not batch or self._stop.is_set():
+            if batch is None:
+                completed = False
                 break
+
+            if self._stop.is_set():
+                completed = False
+                break
+
+            if not batch:
+                break
+
             for post in batch:
                 entry = _post_to_entry(post)
                 if entry["url"]:
@@ -285,7 +287,14 @@ class PostsIndexWorker(QThread):
             if len(batch) < PAGE_SIZE:
                 break
             if self._stop.wait(PAGE_PAUSE):
+                completed = False
                 break
+
+        if not completed:
+            # Keep partial_page and never stamp full_sync_at: the next run
+            # resumes instead of serving a truncated catalog for 30 days.
+            self._save_partial(dest, data, page, posts)
+            return None
 
         data.pop("partial_page", None)
         now = _now_iso()
@@ -293,7 +302,7 @@ class PostsIndexWorker(QThread):
         data["generated_at"] = now
         data["full_sync_at"] = now
         data["posts"] = posts
-        print(f"[PostsIndex] indice completo: {len(posts)} post")
+        log.info(f"[PostsIndex] indice completo: {len(posts)} post")
         self._write_dev_snapshot(data)
         return data
 
@@ -330,4 +339,4 @@ class PostsIndexWorker(QThread):
         path = bundled_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if _write_index(path, data):
-            print(f"[PostsIndex] snapshot di sviluppo aggiornato: {path}")
+            log.info(f"[PostsIndex] snapshot di sviluppo aggiornato: {path}")

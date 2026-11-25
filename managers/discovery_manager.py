@@ -1,15 +1,17 @@
-import json
+import logging
 import os
 import re
 import time
 import functools
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, Q_ARG, QMetaObject, Qt, QTimer, pyqtSignal
 
 from core import secrets
 from core.mini_cover_cache import MiniCoverManager
 from core.paths import PathManager
-from managers.save_manager import safe_game_folder_name
+from core.naming import safe_game_folder_name
 from network.igdb_worker import IGDB_CATEGORIES, MAX_OFFSET, PAGE_SIZE
 from network.steamrip_api import (
     STEAMRIP_CATEGORIES,
@@ -21,12 +23,17 @@ from network.steamrip_api import (
 from network.igdb_meta_worker import IGDBMetaWorker, load_taxonomy
 from network.posts_index import PostsIndexWorker
 
-CACHE_FILENAME = "discovery_cache.json"
-CATEGORY_INDEX_FILENAME = "discovery_categories.json"
+from managers import discovery_matching, discovery_store
+from managers.discovery_store import CACHE_SCHEMA
+from managers.discovery_indexes import MatchIndexCache
+
+log = logging.getLogger(__name__)
+
+CACHE_FILENAME = discovery_store.CACHE_FILENAME
+CATEGORY_INDEX_FILENAME = discovery_store.CATEGORY_INDEX_FILENAME
 CACHE_TTL_SECONDS = 24 * 3600
 RECENT_TTL_SECONDS = 3600
 CATEGORY_INDEX_TTL_SECONDS = 24 * 3600
-CACHE_SCHEMA = 7
 # How often the manager re-checks the row TTLs while the app stays open. The
 # check is local (no network); a request is only issued for a row that expired.
 NATIVE_REFRESH_CHECK_MS = 10 * 60 * 1000
@@ -44,6 +51,10 @@ NON_SORTABLE_KEYS = frozenset({
 })
 EMPTY_PAGE_LIMIT = 5
 
+# Controlled retries when the discovery cache cannot be written. The final
+# attempt happens synchronously in shutdown(); there is no endless loop.
+CACHE_RETRY_DELAYS_MS = (5000, 15000, 60000)
+
 PERF_LOG_MS = 40
 PERF_DEBUG = os.environ.get('SRP_DEBUG_PERF') == '1'
 
@@ -58,7 +69,7 @@ def _perf(name):
             finally:
                 dt = (time.perf_counter() - t0) * 1000.0
                 if PERF_DEBUG and dt > PERF_LOG_MS:
-                    print(f"[PERF] {name}: {dt:.0f}ms")
+                    log.debug(f"[PERF] {name}: {dt:.0f}ms")
         return wrapper
     return deco
 
@@ -66,11 +77,19 @@ def _perf(name):
 IGDB_ROW_KEYS = ("trending", "new_releases")
 
 
-def clean_text(text):
-    text = re.sub(r'(?i)(game of the year|complete edition|ultimate edition|'
-                  r"director\'s cut|deluxe edition|sunset edition|"
-                  r'digital edition|gold edition|standard edition)', '', text)
-    return re.sub(r'[^a-z0-9]', '', (text or "").lower())
+@dataclass(frozen=True)
+class DiscoveryServices:
+    """Dependencies of ``DiscoveryManager``.
+
+    Every entry is a provider read at call time, so replacing the catalog or the
+    installed-games mapping is visible immediately. The only fallback left is the
+    staging folder returned by ``sync_folder`` while ``SavegamesManager`` does not
+    exist yet; essential providers are required.
+    """
+    installed_games: Callable[[], dict]
+    catalog: Callable[[], object | None]
+    sync_folder: Callable[[], str]
+    cover_path: Callable[[str], str]
 
 
 class DiscoveryManager(QObject):
@@ -86,9 +105,9 @@ class DiscoveryManager(QObject):
     meta_ready = pyqtSignal(dict)
     taxonomy_ready = pyqtSignal(dict)
 
-    def __init__(self, mw):
-        super().__init__(mw)
-        self.mw = mw
+    def __init__(self, services, parent=None):
+        super().__init__(parent)
+        self._services = services
         self._data = {}
         self._worker = None
         self._igdb_retry_scheduled = False
@@ -102,18 +121,17 @@ class DiscoveryManager(QObject):
         self._updates_worker = None
         self._index_worker = None
         self._category_index = None
-        self._index = None
-        self._index_token = None
+        self._match_index = MatchIndexCache()
         self._meta_worker = None
         self._meta_inflight = set()
         self._meta_queue = []
         self._igdb_fetch_started = 0.0
         self._taxonomy = None
-        self._match_cache = {}
         self._card_index = None
         self._posts_index = {}
         self._posts_worker = None
         self._catalog_order = None
+        self._catalog_order_token = None
         self._filters = {"search": "", "hide_installed": False,
                          "sr_category": None, "igdb_genre": None}
 
@@ -123,13 +141,19 @@ class DiscoveryManager(QObject):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(1500)
         self._save_timer.timeout.connect(self._flush_cache)
+        self._cache_unsaved = False
+        self._cache_retry_attempt = 0
+        self._cache_retry_timer = QTimer(self)
+        self._cache_retry_timer.setSingleShot(True)
+        self._cache_retry_timer.timeout.connect(self._retry_flush_cache)
+        self._shutting_down = False
 
     # ── setup ────────────────────────────────────────────────────────
 
     def _start_igdb(self):
         """Start the IGDB worker only when credentials are configured."""
         if not secrets.has_igdb_credentials():
-            print("[Discovery] IGDB credentials not configured; rows hidden")
+            log.info("[Discovery] IGDB credentials not configured; rows hidden")
             return
 
         igdb_keys = [c["key"] for c in IGDB_CATEGORIES if c["key"] in IGDB_ROW_KEYS]
@@ -138,7 +162,7 @@ class DiscoveryManager(QObject):
         # requested through it, so skipping it would freeze the rows.
         self._replace_igdb_worker(keys_to_fetch)
         if not keys_to_fetch:
-            print(f"[Discovery] IGDB rows from cache ({len(igdb_keys)} keys)")
+            log.info(f"[Discovery] IGDB rows from cache ({len(igdb_keys)} keys)")
 
     def _replace_igdb_worker(self, initial_keys):
         """Start a fresh IGDB worker, stopping the previous one first.
@@ -153,7 +177,7 @@ class DiscoveryManager(QObject):
             try:
                 previous.stop()
                 if not previous.wait(2500):
-                    print("[Discovery] previous IGDB worker did not stop in time")
+                    log.info("[Discovery] previous IGDB worker did not stop in time")
             except RuntimeError:
                 pass
 
@@ -179,7 +203,7 @@ class DiscoveryManager(QObject):
         from network.cover_worker import CoverWorker
 
         self._cover_worker = CoverWorker(
-            installed_games=getattr(self.mw, 'installed_games', {}) or {},
+            installed_games=self.installed_games,
             sync_folder=self._sync_folder(),
             parent=self,
         )
@@ -197,7 +221,7 @@ class DiscoveryManager(QObject):
 
         # SteamRip: righe native (Recently Updated + categorie) paginate via REST.
         if not self._start_native_batch():
-            print("[Discovery] SteamRip rows from cache")
+            log.info("[Discovery] SteamRip rows from cache")
 
         # L'indice completo (51 richieste) è opzionale: la REST API rate-limita.
         if os.environ.get("SRP_DISCOVERY_INDEX") == "1":
@@ -268,7 +292,7 @@ class DiscoveryManager(QObject):
         entries = list(entries or [])
         if not entries:
             # Layout change or empty page: keep whatever is cached.
-            print("[Discovery] Recently Updated: empty page, cache kept")
+            log.info("[Discovery] Recently Updated: empty page, cache kept")
             return
         self._data["recent_updates"] = {
             "title": self._title("recent_updates"),
@@ -283,13 +307,13 @@ class DiscoveryManager(QObject):
             "_empty_pages": 0,
             "catalog_size": self._catalog_size(),
         }
-        self._card_index = None
+        self._invalidate_card_index()
         self._save_cache()
-        print(f"[Discovery] Recently Updated: {len(entries)} entries")
+        log.info(f"[Discovery] Recently Updated: {len(entries)} entries")
         self.row_reset.emit("recent_updates")
 
     def _on_updates_error(self, message):
-        print(f"[Discovery] Recently Updated error: {message}")
+        log.warning(f"[Discovery] Recently Updated error: {message}")
 
     def _cleanup_updates_worker(self, worker):
         if self._updates_worker is worker:
@@ -308,7 +332,7 @@ class DiscoveryManager(QObject):
                 if self._needs_fetch(c["key"])]
         if not keys:
             return
-        print(f"[Discovery] IGDB refresh: {', '.join(keys)}")
+        log.info(f"[Discovery] IGDB refresh: {', '.join(keys)}")
         self._replace_igdb_worker(keys)
 
     # ── posts index ──────────────────────────────────────────────────
@@ -319,24 +343,24 @@ class DiscoveryManager(QObject):
             return
         worker = PostsIndexWorker(self)
         worker.ready.connect(self._on_posts_index_ready)
-        worker.failed.connect(lambda msg: print(f"[PostsIndex] {msg}"))
+        worker.failed.connect(lambda msg: log.warning(f"[PostsIndex] {msg}"))
         self._posts_worker = worker
         worker.start()
 
     def _on_posts_index_ready(self, data):
         self._posts_index = (data or {}).get("posts") or {}
-        self._catalog_order = None
+        self._invalidate_catalog_order()
         entry = self._data.get("all_games")
         if entry is not None:
             entry["cards"] = []
             entry["next_offset"] = 0
             entry["has_more"] = True
             entry["_dirty"] = True
-        print(f"[Discovery] posts index ready: {len(self._posts_index)} post")
+        log.info(f"[Discovery] posts index ready: {len(self._posts_index)} post")
         self.categories_changed.emit()
 
     def _catalog_entry_for(self, title):
-        catalog = getattr(self.mw, "master_catalog", None)
+        catalog = self.catalog
         if catalog is None:
             return {}
         entry = catalog.get_entry(title)
@@ -354,9 +378,10 @@ class DiscoveryManager(QObject):
 
     def _catalog_title_order(self):
         """Titoli del catalogo, i piu' recenti (data SteamRip) prima."""
-        if self._catalog_order is not None:
+        token = self._catalog_token()
+        if self._catalog_order is not None and self._catalog_order_token == token:
             return self._catalog_order
-        catalog = getattr(self.mw, "master_catalog", None)
+        catalog = self.catalog
         titles = list(catalog.keys()) if catalog else []
         dated = []
         undated = []
@@ -370,19 +395,17 @@ class DiscoveryManager(QObject):
         dated.sort(key=lambda item: item[0], reverse=True)
         undated.sort(key=str.lower)
         self._catalog_order = [t for _d, t in dated] + undated
+        self._catalog_order_token = token
         return self._catalog_order
 
     def _catalog_cards(self, titles):
-        installed = getattr(self.mw, "installed_games", {}) or {}
-        sync = self._sync_folder()
         cards = []
         for title in titles:
             entry = self._catalog_entry_for(title)
             igdb = entry.get("igdb_meta") or {}
             cards.append({
                 "title": title,
-                "cover_path": MiniCoverManager.resolve_cover_path(
-                    title, installed, sync),
+                "cover_path": self._cover_path(title),
                 "meta": dict(entry),
                 "igdb": igdb,
                 "igdb_meta": igdb,
@@ -498,112 +521,78 @@ class DiscoveryManager(QObject):
         return time.time() - (entry.get("fetched_at") or 0) > ttl
 
     def _sync_folder(self):
-        manager = getattr(self.mw, 'savegames_manager', None)
-        if manager is not None:
-            try:
-                return manager.get_sync_folder()
-            except Exception:
-                pass
-        return str(PathManager.get_staging_dir())
+        try:
+            folder = self._services.sync_folder()
+        except Exception:
+            log.exception("[Discovery] sync folder provider failed")
+            folder = ""
+        return folder or str(PathManager.get_staging_dir())
 
     # ── cache ────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _cache_path():
-        d = PathManager.get_app_data_dir()
-        os.makedirs(str(d), exist_ok=True)
-        return os.path.join(str(d), CACHE_FILENAME)
-
     def _load_cache(self):
-        self._card_index = None
+        self._invalidate_card_index()
+        dropped = 0
         try:
-            with open(self._cache_path(), "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                valid_keys = {c["key"] for c in self.categories()}
-                for key, entry in data.items():
-                    if key == "all_games" or key not in valid_keys:
-                        continue  # pulizia righe non più esistenti
-                    if (isinstance(entry, dict)
-                            and isinstance(entry.get("cards"), list)):
-                        if entry.get("schema") != CACHE_SCHEMA:
-                            # Old schema: refetch instead of showing a stale
-                            # snapshot with the previous (append-only) order.
-                            continue
-                        entry.setdefault("games", [])
-                        entry.setdefault("title", self._title(key))
-                        self._data[key] = entry
+            rows, dropped = discovery_store.load_rows(
+                discovery_store.cache_path(),
+                {c["key"] for c in self.categories()},
+                self._title,
+            )
         except Exception:
             self._data = {}
+        else:
+            self._data.update(rows)
+        if dropped:
+            log.info(
+                "[Discovery] cache: dropped %d row(s) written with an older "
+                "schema; they will be fetched again", dropped,
+            )
 
     def _save_cache(self):
+        self._cache_unsaved = True
         self._save_timer.start()
 
     @_perf("flush_discovery_cache")
     def _flush_cache(self):
         # Scriviamo solo cio' che non e' ricostruibile: games e meta venivano
         # riscritti per intero a ogni pagina (5.4 MB, ~150ms di freeze).
-        payload = {}
-        for key, entry in self._data.items():
-            if key == "all_games":
-                continue
-            cards = []
-            for card in entry.get("cards") or []:
-                cards.append({
-                    "title": card.get("title", ""),
-                    "igdb": card.get("igdb") or {},
-                    "steamrip_categories": card.get("steamrip_categories") or [],
-                    "url": card.get("url", ""),
-                    "source": card.get("source", ""),
-                })
-            payload[key] = {
-                "title": entry.get("title", ""),
-                "source": entry.get("source", "igdb"),
-                "next_offset": int(entry.get("next_offset") or 0),
-                "next_page": entry.get("next_page"),
-                "has_more": bool(entry.get("has_more")),
-                "fetched_at": entry.get("fetched_at") or 0,
-                "schema": entry.get("schema"),
-                "catalog_size": entry.get("catalog_size"),
-                "_empty_pages": entry.get("_empty_pages", 0),
-                "_dirty": False,
-                "cards": cards,
-            }
-        tmp = None
+        payload = discovery_store.rows_payload(self._data)
         try:
-            path = self._cache_path()
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, separators=(",", ":"), ensure_ascii=False)
-            # Atomic swap: an interrupted write must not leave a truncated
-            # cache behind (the next start would throw every row away).
-            os.replace(tmp, path)
+            discovery_store.save_rows(discovery_store.cache_path(), payload)
         except Exception as e:
-            print(f"[Discovery] cache save error: {e}")
-            try:
-                if tmp and os.path.exists(tmp):
-                    os.remove(tmp)
-            except OSError:
-                pass
+            log.exception(f"[Discovery] cache save error: {e}")
+            self._cache_unsaved = True
+            self._schedule_cache_retry()
+            return
+        self._cache_unsaved = False
+        self._cache_retry_attempt = 0
+        self._cache_retry_timer.stop()
+
+    def _schedule_cache_retry(self):
+        if self._shutting_down:
+            return
+        if self._cache_retry_attempt >= len(CACHE_RETRY_DELAYS_MS):
+            return
+        delay = CACHE_RETRY_DELAYS_MS[self._cache_retry_attempt]
+        self._cache_retry_attempt += 1
+        self._cache_retry_timer.start(delay)
+
+    def _retry_flush_cache(self):
+        self._flush_cache()
 
     # ── category index (url -> SteamRip category ids) ────────────────
 
-    @staticmethod
-    def _category_index_path():
-        d = PathManager.get_app_data_dir()
-        os.makedirs(str(d), exist_ok=True)
-        return os.path.join(str(d), CATEGORY_INDEX_FILENAME)
-
     def _load_category_index(self):
         try:
-            with open(self._category_index_path(), "r", encoding="utf-8") as f:
-                data = json.load(f)
-            index = data.get("index")
-            if isinstance(index, dict) and index:
-                self._category_index = index
-                self._category_index_fetched_at = float(data.get("fetched_at") or 0)
+            index, fetched_at = discovery_store.load_category_index(
+                discovery_store.category_index_path())
         except Exception:
-            pass
+            # best-effort: the category cache is optional and regenerated
+            return
+        if index:
+            self._category_index = index
+            self._category_index_fetched_at = fetched_at
 
     def _category_index_stale(self):
         age = time.time() - getattr(self, "_category_index_fetched_at", 0)
@@ -623,14 +612,14 @@ class DiscoveryManager(QObject):
         self._category_index = index or {}
         self._category_index_fetched_at = time.time()
         try:
-            with open(self._category_index_path(), "w", encoding="utf-8") as f:
-                json.dump({
-                    "fetched_at": self._category_index_fetched_at,
-                    "index": self._category_index,
-                }, f, ensure_ascii=False)
+            discovery_store.save_category_index(
+                discovery_store.category_index_path(),
+                self._category_index,
+                self._category_index_fetched_at,
+            )
         except Exception as e:
-            print(f"[Discovery] category index save error: {e}")
-        print(f"[Discovery] category index ready: {len(self._category_index)} titles")
+            log.exception(f"[Discovery] category index save error: {e}")
+        log.info(f"[Discovery] category index ready: {len(self._category_index)} titles")
 
     def _cleanup_index_worker(self, worker):
         if self._index_worker is worker:
@@ -642,7 +631,8 @@ class DiscoveryManager(QObject):
         if url:
             return list(index.get(url.rstrip("/")) or [])
         if title:
-            entry = self.mw.master_catalog.get_entry(title) if self.mw.master_catalog else None
+            catalog = self.catalog
+            entry = catalog.get_entry(title) if catalog else None
             if isinstance(entry, dict) and entry.get("url"):
                 return list(index.get(entry["url"].rstrip("/")) or [])
         return []
@@ -752,7 +742,7 @@ class DiscoveryManager(QObject):
         if empty >= EMPTY_PAGE_LIMIT:
             entry["has_more"] = False
             entry["next_offset"] = MAX_OFFSET
-            print(f"[Discovery] '{entry.get('title')}' fermata dopo "
+            log.info(f"[Discovery] '{entry.get('title')}' fermata dopo "
                   f"{empty} pagine senza nuovi match")
 
     def _append_matched(self, key, games, source="igdb"):
@@ -773,7 +763,7 @@ class DiscoveryManager(QObject):
             cards.append(card)
             added += 1
         entry["catalog_size"] = self._catalog_size()
-        self._card_index = None
+        self._invalidate_card_index()
         return added
 
     @_perf("native_page")
@@ -813,7 +803,7 @@ class DiscoveryManager(QObject):
             entry["_dirty"] = False
             entry["fetched_at"] = time.time()
             entry["catalog_size"] = self._catalog_size()
-            self._card_index = None
+            self._invalidate_card_index()
             self._save_cache()
             self.row_reset.emit(key)
             return
@@ -843,7 +833,7 @@ class DiscoveryManager(QObject):
 
     def _on_native_error(self, key, message):
         self._native_loading.discard(key)
-        print(f"[Discovery] SteamRip row '{key}' error: {message}")
+        log.warning(f"[Discovery] SteamRip row '{key}' error: {message}")
 
     def _cleanup_native_worker(self, worker, key=None):
         if worker in self._native_workers:
@@ -906,22 +896,36 @@ class DiscoveryManager(QObject):
         )
         return True
 
-    def _catalog_size(self):
+    @property
+    def catalog(self):
+        return self._services.catalog()
+
+    @property
+    def installed_games(self):
+        return self._services.installed_games() or {}
+
+    def _cover_path(self, title):
         try:
-            return len(self.mw.master_catalog)
+            return self._services.cover_path(title) or ""
+        except Exception:
+            log.exception(f"[Discovery] cover resolver failed for '{title}'")
+            return ""
+
+    def _catalog_size(self):
+        catalog = self.catalog
+        try:
+            return len(catalog) if catalog is not None else 0
         except Exception:
             return 0
 
     def _hydrate_entry(self, entry):
         """Aggiorna cover/meta dalle cache locali senza rifare il matching."""
-        installed = getattr(self.mw, 'installed_games', {}) or {}
-        sync = self._sync_folder()
-        catalog = self.mw.master_catalog
+        catalog = self.catalog
         for card in entry.get("cards") or []:
             title = card.get("title")
             if not title:
                 continue
-            card["cover_path"] = MiniCoverManager.resolve_cover_path(title, installed, sync)
+            card["cover_path"] = self._cover_path(title)
             meta = catalog.get_entry(title) if catalog else None
             if isinstance(meta, dict):
                 card["meta"] = dict(meta)
@@ -969,12 +973,12 @@ class DiscoveryManager(QObject):
         except Exception:
             return
 
-        catalog = getattr(self.mw, 'master_catalog', None)
+        catalog = self.catalog
         try:
             valid = {safe_game_folder_name(t) for t in catalog.keys()} if catalog else set()
         except Exception:
             valid = set()
-        for title in (getattr(self.mw, 'installed_games', {}) or {}):
+        for title in self.installed_games:
             valid.add(safe_game_folder_name(title))
 
         # Catalogo non ancora pronto: non rischiamo di cancellare il valido.
@@ -1002,94 +1006,32 @@ class DiscoveryManager(QObject):
             except OSError:
                 pass
         if removed:
-            print(f"[Discovery] cover stale rimosse: {removed}")
+            log.info(f"[Discovery] cover stale rimosse: {removed}")
 
     # ── matching ─────────────────────────────────────────────────────
 
-    def _catalog_token(self):
+    def _catalog_token(self, catalog=None):
+        catalog = catalog if catalog is not None else self.catalog
+        if catalog is None:
+            return (0, 0, 0)
+        # The strong reference lives in MatchIndexCache: the identity is part
+        # of the token, so a swapped catalog always invalidates the index even
+        # when size and path match. MasterCatalog also supplies a match
+        # revision, which catches in-memory edits before the debounced write.
         try:
-            mtime = os.path.getmtime(self.mw.master_catalog._db_path)
+            mtime = os.path.getmtime(catalog._db_path)
         except Exception:
             mtime = 0
-        return (len(self.mw.master_catalog), mtime)
+        try:
+            size = len(catalog)
+        except Exception:
+            size = 0
+        revision = int(getattr(catalog, "match_revision", 0) or 0)
+        return (id(catalog), size, mtime, revision)
 
     def _build_index(self):
-        token = self._catalog_token()
-        if self._index is not None and self._index_token == token:
-            return self._index
-        self._match_cache = {}
-        appid_index = {}
-        exact = {}
-        cleaned = []
-        urls = {}
-        catalog = self.mw.master_catalog
-        for title in catalog.keys():
-            entry = catalog.get_entry(title)
-            clean = clean_text(title)
-            if clean and clean not in exact:
-                exact[clean] = title
-            if isinstance(entry, dict):
-                sid = str(entry.get("steam_id") or "").strip()
-                if not sid:
-                    sg = entry.get("sgdb_assets")
-                    if isinstance(sg, dict):
-                        sid = str(sg.get("steam_app_id") or "").strip()
-                if sid.isdigit() and sid not in appid_index:
-                    appid_index[sid] = title
-                raw = clean_text(str(entry.get("raw_title") or ""))
-                if raw and raw not in exact:
-                    exact[raw] = title
-                url = (entry.get("url") or "").rstrip("/")
-                if url and url not in urls:
-                    urls[url] = title
-            if clean:
-                cleaned.append((clean, title))
-        self._index = {"appid": appid_index, "exact": exact, "cleaned": cleaned, "urls": urls}
-        self._index_token = token
-        return self._index
-
-    def _match_post(self, post, idx):
-        """Match di un post SteamRip al titolo del catalogo (URL prima del titolo)."""
-        url = (post.get("url") or "").rstrip("/")
-        if url and url in idx["urls"]:
-            return idx["urls"][url]
-        clean = clean_text(post.get("title") or "")
-        if clean and clean in idx["exact"]:
-            return idx["exact"][clean]
-        return self._match_one({"name": post.get("title") or "", "steam_appid": ""}, idx)
-
-    def _match_one(self, game, idx):
-        sid = str(game.get("steam_appid") or "").strip()
-        if sid and sid in idx["appid"]:
-            return idx["appid"][sid]
-
-        name = str(game.get("name") or "")
-        clean = clean_text(name)
-        if not clean:
-            return None
-        if clean in idx["exact"]:
-            return idx["exact"][clean]
-
-        cached = self._match_cache.get(clean, "__miss__")
-        if cached != "__miss__":
-            return cached or None
-
-        best = None
-        best_score = 0
-        for cc, title in idx["cleaned"]:
-            if len(cc) < 3:
-                continue
-            if clean in cc:
-                score = len(clean)
-            elif cc in clean:
-                score = len(cc)
-            else:
-                continue
-            if score > best_score:
-                best = title
-                best_score = score
-        self._match_cache[clean] = best or ""
-        return best
+        catalog = self.catalog
+        return self._match_index.get(catalog, self._catalog_token(catalog))
 
     @_perf("rebuild_matched")
     def _rebuild_matched(self, key):
@@ -1101,42 +1043,12 @@ class DiscoveryManager(QObject):
             return
         source = entry.get("source", "igdb")
         entry["cards"] = self._match_games(entry.get("games") or [], source=source)
-        self._card_index = None
+        self._invalidate_card_index()
 
     def _match_games(self, games, source="igdb"):
-        installed = getattr(self.mw, 'installed_games', {}) or {}
-        sync = self._sync_folder()
-        idx = self._build_index()
-        matched = []
-        seen = set()
-        for game in games:
-            if source == "steamrip":
-                title = self._match_post(game, idx)
-                igdb_meta = {}
-                steamrip_categories = list(game.get("categories") or [])
-                post_url = (game.get("url") or "").rstrip("/")
-            else:
-                title = self._match_one(game, idx)
-                igdb_meta = game
-                steamrip_categories = []
-                post_url = ""
-            if not title or title in seen:
-                continue
-            seen.add(title)
-            entry = self.mw.master_catalog.get_entry(title)
-            cover = MiniCoverManager.resolve_cover_path(title, installed, sync)
-            if isinstance(entry, dict) and entry.get("steamrip_categories"):
-                steamrip_categories = sorted(set(steamrip_categories) | set(entry["steamrip_categories"]))
-            matched.append({
-                "title": title,
-                "cover_path": cover,
-                "meta": dict(entry) if isinstance(entry, dict) else {},
-                "igdb": igdb_meta,
-                "steamrip_categories": steamrip_categories,
-                "url": post_url,
-                "source": source,
-            })
-        return matched
+        return discovery_matching.build_cards(
+            games, self._build_index(), self._match_index.cache, self.catalog,
+            self._cover_path, source=source)
 
     # ── accessors ────────────────────────────────────────────────────
 
@@ -1173,6 +1085,9 @@ class DiscoveryManager(QObject):
     def _invalidate_card_index(self):
         self._card_index = None
 
+    def _invalidate_catalog_order(self):
+        self._catalog_order = None
+
     def _find_card(self, title):
         if not title:
             return None
@@ -1191,7 +1106,7 @@ class DiscoveryManager(QObject):
         """Arricchisce in background i titoli visibili (generi/temi/cover/rating)."""
         if not titles or not secrets.has_igdb_credentials():
             return
-        catalog = self.mw.master_catalog
+        catalog = self.catalog
         for title in titles:
             if not title or title in self._meta_inflight:
                 continue
@@ -1234,11 +1149,12 @@ class DiscoveryManager(QObject):
         for title, meta in (results or {}).items():
             if not isinstance(meta, dict):
                 continue
-            if self.mw.master_catalog:
-                self.mw.master_catalog.set_game_field(title, "igdb_meta", meta)
+            catalog = self.catalog
+            if catalog:
+                catalog.set_game_field(title, "igdb_meta", meta)
                 appid = str(meta.get("steam_appid") or "").strip()
-                if appid.isdigit() and not self.mw.master_catalog.get_game_field(title, "steam_id"):
-                    self.mw.master_catalog.set_game_field(title, "steam_id", appid)
+                if appid.isdigit() and not catalog.get_game_field(title, "steam_id"):
+                    catalog.set_game_field(title, "steam_id", appid)
             card = self._find_card(title)
             if card:
                 card["igdb_meta"] = meta
@@ -1266,7 +1182,7 @@ class DiscoveryManager(QObject):
         query = str(self._filters.get("search") or "").strip().lower()
         if not query:
             return []
-        catalog = getattr(self.mw, "master_catalog", None)
+        catalog = self.catalog
         if catalog is None:
             return []
 
@@ -1318,7 +1234,7 @@ class DiscoveryManager(QObject):
         f = self._filters
         if f["search"] and f["search"] not in title.lower():
             return False
-        if f["hide_installed"] and title in (getattr(self.mw, "installed_games", {}) or {}):
+        if f["hide_installed"] and title in self.installed_games:
             return False
         if f["sr_category"]:
             cats = set(card.get("steamrip_categories") or [])
@@ -1426,7 +1342,7 @@ class DiscoveryManager(QObject):
             # La cache slim non salva "meta": recuperiamo l'entry dal catalogo,
             # altrimenti su una macchina nuova (cache cover vuota) il job non
             # ha ne' grid SGDB ne' cover IGDB e la card resta senza immagine.
-            catalog = getattr(self.mw, "master_catalog", None)
+            catalog = self.catalog
             title = card.get("title")
             if catalog is not None and title:
                 entry = catalog.get_entry(title) or {}
@@ -1454,12 +1370,16 @@ class DiscoveryManager(QObject):
         }
 
     def enqueue_cards(self, cards, high=False, allow_scrape=False,
-                      allow_page_fetch=False):
+                      allow_page_fetch=False, force=False):
         """Enqueue covers for explicit card dicts.
 
         Search results are built on the fly by ``search_cards()`` and are not
         stored in ``self._data``: looking them up by title (the old
         ``enqueue_covers`` path) silently found nothing.
+
+        ``force`` bypasses the one-upgrade-per-session guard so a card still
+        showing the horizontal SteamRip fallback can be re-enqueued when its
+        vertical IGDB cover becomes known.
         """
         if self._cover_worker is None or not cards:
             return
@@ -1471,9 +1391,9 @@ class DiscoveryManager(QObject):
             if cover and MiniCoverManager.is_vertical_cover(cover):
                 continue
             if cover:
-                # Horizontal fallback already cached: try one upgrade per
-                # session instead of treating it as a final cover.
-                if card["title"] in self._cover_upgrade_attempted:
+                # Horizontal fallback already cached: try an upgrade instead
+                # of treating it as a final cover.
+                if card["title"] in self._cover_upgrade_attempted and not force:
                     continue
                 self._cover_upgrade_attempted.add(card["title"])
             jobs.append(self._job_for_card(
@@ -1483,7 +1403,7 @@ class DiscoveryManager(QObject):
             self._cover_worker.enqueue(jobs, high=high)
 
     def enqueue_covers(self, titles, high=False, allow_scrape=False,
-                       allow_page_fetch=False):
+                       allow_page_fetch=False, force=False):
         """Enqueue covers for titles already present in loaded rows."""
         if self._cover_worker is None or not titles:
             return
@@ -1491,10 +1411,14 @@ class DiscoveryManager(QObject):
         cards = []
         for entry in self._data.values():
             for card in entry.get("cards") or []:
-                if card["title"] in wanted and not card.get("cover_path"):
-                    cards.append(card)
+                if card["title"] not in wanted:
+                    continue
+                cover = card.get("cover_path")
+                if cover and MiniCoverManager.is_vertical_cover(cover):
+                    continue
+                cards.append(card)
         self.enqueue_cards(cards, high=high, allow_scrape=allow_scrape,
-                           allow_page_fetch=allow_page_fetch)
+                           allow_page_fetch=allow_page_fetch, force=force)
 
     def cancel_covers(self, titles):
         """Drop queued cover jobs for titles that left the lazy window."""
@@ -1520,6 +1444,15 @@ class DiscoveryManager(QObject):
         self._cover_worker.download_url(title, img_url, high=True)
 
     def shutdown(self):
+        self._shutting_down = True
+        for name in ("_save_timer", "_cache_retry_timer", "_posts_timer",
+                     "_native_refresh_timer", "_igdb_refresh_timer"):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass
         posts = self._posts_worker
         if posts is not None and posts.isRunning():
             try:
@@ -1548,3 +1481,5 @@ class DiscoveryManager(QObject):
             self._index_worker.wait(2000)
         if self._meta_worker is not None and self._meta_worker.isRunning():
             self._meta_worker.wait(3000)
+        if self._cache_unsaved:
+            self._flush_cache()

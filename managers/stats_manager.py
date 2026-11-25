@@ -11,10 +11,12 @@ session or a price refresh.
 from __future__ import annotations
 
 import statistics
+import threading
 import time
 from datetime import date, datetime, timedelta
 
-from core import events as ev
+from core import events as ev, steam_ids
+from core.sessions import normalize_sessions
 from core.price_utils import detect_currency, parse_price_to_cents
 
 RANGE_DAYS = {
@@ -59,11 +61,7 @@ def _float(value, default=0.0):
 
 
 def _signed_appid(value):
-    try:
-        appid = int(value)
-    except (TypeError, ValueError):
-        return None
-    return appid - 0x100000000 if appid >= 0x80000000 else appid
+    return steam_ids.signed_appid(value)
 
 
 class StatsManager:
@@ -82,47 +80,87 @@ class StatsManager:
 
         self._cache = None
         self._cache_key = None
+        self._last_snapshot = {}
+        self._snapshot_revision = 0
+        self._generation = 0
+        self._lock = threading.RLock()
         self._game_timeline_cache = {}
         self._global_timeline_cache = {}
 
     # ------------------------------------------------------------------ events
 
     def bind(self, events) -> None:
+        self._events = events
         for name in INVALIDATING_EVENTS:
             events.subscribe(name, self._on_event)
 
     def _on_event(self, _payload) -> None:
-        self.invalidate()
+        self.invalidate(notify=False)
 
-    def invalidate(self) -> None:
-        self._cache = None
-        self._cache_key = None
-        self._game_timeline_cache.clear()
-        self._global_timeline_cache.clear()
+    def invalidate(self, notify: bool = True) -> None:
+        with self._lock:
+            self._generation += 1
+            self._cache = None
+            self._cache_key = None
+            self._game_timeline_cache.clear()
+            self._global_timeline_cache.clear()
+        events = getattr(self, "_events", None)
+        if notify and events is not None:
+            try:
+                events.emit_event(ev.EVENT_STATS_INVALIDATED)
+            except Exception:
+                # best-effort: the event bus is optional; stats must never break the UI
+                pass
 
     # ------------------------------------------------------------------ public
 
-    def snapshot(self, range_key=None, region=None) -> dict:
+    def _snapshot_key(self, range_key=None, region=None):
         config = self._config_value()
         prefs = self._prefs()
         stats_cfg = config.get("stats", {}) if isinstance(config, dict) else {}
         prefs = prefs if isinstance(prefs, dict) else {}
-
-        range_key = self._normalize_range(
+        key_range = self._normalize_range(
             range_key or stats_cfg.get("range") or prefs.get("range") or "90d"
         )
-        region = str(
+        key_region = str(
             region or stats_cfg.get("region") or prefs.get("region") or "US"
         ).upper()
+        return key_range, key_region
 
-        key = (range_key, region)
-        if self._cache is not None and self._cache_key == key:
-            return self._cache
+    def cached_snapshot(self, range_key=None, region=None):
+        """Return the cache for this key without building anything."""
+        key = self._snapshot_key(range_key, region)
+        with self._lock:
+            if self._cache is not None and self._cache_key == key:
+                return self._cache
+        return None
 
-        snapshot = self._build(range_key, region)
-        self._cache = snapshot
-        self._cache_key = key
+    def snapshot(self, range_key=None, region=None, allow_build=True) -> dict:
+        key = self._snapshot_key(range_key, region)
+        with self._lock:
+            if self._cache is not None and self._cache_key == key:
+                return self._cache
+            if not allow_build:
+                # Non-blocking callers (achievements) use the last valid
+                # snapshot; the UI worker refreshes it shortly after.
+                return self._last_snapshot or {}
+            generation = self._generation
+
+        snapshot = self._build(*key)
+
+        with self._lock:
+            if generation == self._generation:
+                self._cache = snapshot
+                self._cache_key = key
+                self._last_snapshot = snapshot
+                self._snapshot_revision += 1
         return snapshot
+
+    @property
+    def snapshot_revision(self) -> int:
+        """Incremented every time a new snapshot becomes the current one."""
+        with self._lock:
+            return self._snapshot_revision
 
     def game_timeline(self, title, range_key=None) -> dict:
         """Timeline for one title, using the same range rules as the tab."""
@@ -311,6 +349,7 @@ class StatsManager:
                 if sid and str(sid).isdigit():
                     return str(sid)
         except Exception:
+            # best-effort: the event bus is optional; stats must never break the UI
             pass
         return ""
 
@@ -380,31 +419,7 @@ class StatsManager:
 
     @staticmethod
     def _session_list(records):
-        sessions = []
-        for record in records:
-            if not isinstance(record, dict):
-                continue
-            title = str(record.get("title") or "").strip()
-            if not title:
-                continue
-            seconds = _int(record.get("seconds"))
-            end = _int(record.get("end") or record.get("at"))
-            start = _int(record.get("start"))
-            if seconds <= 0 and end > start:
-                seconds = end - start
-            if seconds <= 0 or end <= 0:
-                continue
-            if start <= 0:
-                start = max(0, end - seconds)
-            sessions.append({
-                "id": record.get("id") or "",
-                "title": title,
-                "start": start,
-                "end": end,
-                "seconds": seconds,
-                "source": record.get("source") or "",
-            })
-        return sessions
+        return normalize_sessions(records)
 
     @staticmethod
     def _local_date(timestamp: int) -> date:

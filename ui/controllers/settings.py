@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -37,7 +38,8 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -56,18 +58,18 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core import secrets
 from core.events import (
     EVENT_BACKUP_CREATED,
     EVENT_IGDB_DETAILS_READY,
     EVENT_LAUNCHER_START,
+    EVENT_PREFS_CHANGED,
     EVENT_PRICE_REFRESHED,
     EVENT_SESSION_END,
 )
@@ -86,6 +88,8 @@ from network.steam_build_worker import SteamBuildWorker
 from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
+
+log = logging.getLogger(__name__)
 
 # --- APP WINDOW PRINCIPALE ---
 
@@ -155,7 +159,7 @@ class SettingsController:
                 args = [] if getattr(sys, "frozen", False) else list(sys.argv)
                 QProcess.startDetached(sys.executable, args)
         except Exception as exc:
-            print(f"[Settings] restart failed: {exc}")
+            log.exception(f"[Settings] restart failed: {exc}")
         app = QApplication.instance()
         if app:
             app.quit()
@@ -255,7 +259,7 @@ class SettingsController:
             try:
                 status = self.backup_service.state_status()
             except Exception as exc:
-                print(f"[State] status failed: {exc}")
+                log.exception(f"[State] status failed: {exc}")
         had_igdb = secrets.has_igdb_credentials()
         dialog = SettingsDialog(self.app_config, self, state_backup_status=status)
         dialog.config_saved.connect(self.update_entire_config)
@@ -281,13 +285,28 @@ class SettingsController:
             )
             return
         mirror = result.get('mirror') or {}
-        mirror_text = ""
-        if mirror.get('configured'):
-            mirror_text = "\nMirror: {} file(s) copied.".format(mirror.get('copied', 0))
+        mirror_text = self._state_backup_mirror_text(mirror)
         QMessageBox.information(
             self, "Launcher Data Backup",
             "Launcher data saved to:\n{}{}".format(result.get('root', ''), mirror_text),
         )
+
+    @staticmethod
+    def _state_backup_mirror_text(mirror):
+        """One-line mirror status for the manual launcher-state backup."""
+        mirror = mirror or {}
+        status = mirror.get('status')
+        if status == 'busy':
+            return ("\nMirror: skipped (a savegame operation is busy); "
+                    "it will be updated by the next backup operation.")
+        if status == 'cancelled':
+            return "\nMirror: skipped during shutdown; the local backup is intact."
+        if status == 'failed':
+            return ("\nMirror: skipped after an error; the local backup is intact, "
+                    "see the log for details.")
+        if mirror.get('configured'):
+            return "\nMirror: {} file(s) copied.".format(mirror.get('copied', 0))
+        return ""
 
     def _restore_launcher_state(self):
         service = getattr(self, 'backup_service', None)
@@ -339,22 +358,31 @@ class SettingsController:
         try:
             data_files.ensure_user_data()
         except Exception as exc:
-            print(f"[DataFiles] seed after config change failed: {exc}")
+            log.exception(f"[DataFiles] seed after config change failed: {exc}")
         self.apply_current_theme(self.app_config["theme"])
         if hasattr(self, 'savegames_manager'):
             self.savegames_manager.update_app_config(self.app_config)
-        self.lib_manager.scan_library()
-        if hasattr(self, 'tab_discovery'):
-            self.tab_discovery.refresh_library()
-            self.tab_discovery.refresh_config_notice()
         if hasattr(self, 'savegames_tab'):
             self.savegames_tab.app_config = self.app_config
             self.savegames_tab.refresh_view()
-        if hasattr(self, 'stats_tab'):
-            self.stats_tab.refresh()
+
+        def _after_library_scan():
+            if hasattr(self, 'tab_discovery'):
+                self.tab_discovery.refresh_library()
+                self.tab_discovery.refresh_config_notice()
+            if hasattr(self, 'stats_tab'):
+                self.stats_tab.refresh()
+
+        self.lib_manager.scan_library(on_done=_after_library_scan)
         self.start_savegames_timer()
         if hasattr(self, 'schedule_state_backup'):
             self.schedule_state_backup()
+        if hasattr(self, 'events'):
+            try:
+                self.events.emit_event(EVENT_PREFS_CHANGED, {"source": "settings"})
+            except Exception:
+                # best-effort: the event bus is optional
+                pass
 
     def get_savegames_interval_ms(self):
         cfg = self.app_config.get('savegames', {})
@@ -382,18 +410,29 @@ class SettingsController:
     def _perform_scheduled_savegame_sync(self):
         if not hasattr(self, 'savegames_manager'):
             return
-        summary = self.savegames_manager.sync_all_games()
-        # Sync playtime con Steam (merge massimo) e flush degli aggiornamenti
-        # solo se Steam è chiuso (mai uccisione automatica di Steam).
+        if hasattr(self, 'savegames_tab'):
+            started = self.savegames_tab.sync_all(
+                silent=True, on_done=self._on_scheduled_savegame_sync_done)
+            if not started:
+                # A manual operation is already running; the next timer tick retries.
+                return
+        else:
+            summary = self.savegames_manager.sync_all_games()
+            self._on_scheduled_savegame_sync_done(summary)
+
+    def _on_scheduled_savegame_sync_done(self, summary):
+        # Playtime merge stays on the GUI thread: it is small and only reads
+        # local VDF files, and the savegames copy already happened in a worker.
         if hasattr(self, 'playtime_manager'):
             try:
                 self.playtime_manager.sync_all()
                 self.playtime_manager.try_flush_pending()
             except Exception as e:
-                print(f"[Playtime] Errore sync programmata: {e}")
+                log.exception(f"[Playtime] Errore sync programmata: {e}")
         if hasattr(self, 'savegames_tab'):
             created = summary.get('synced_games', 0)
             unchanged = summary.get('unchanged_games', 0)
+            self.savegames_tab.refresh_view()
             if summary.get('errors'):
                 self.savegames_tab.message_label.setText(
                     f"Auto-sync completed with warnings: {len(summary['errors'])} issue(s)."
@@ -402,4 +441,3 @@ class SettingsController:
                 self.savegames_tab.message_label.setText(
                     f"Auto-sync completed: {created} new snapshot(s), {unchanged} unchanged."
                 )
-            self.savegames_tab.refresh_view()

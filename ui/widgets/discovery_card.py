@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 import PyQt6.sip as sip
@@ -10,8 +11,10 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink
 from PyQt6.QtWidgets import (
     QFrame, QLabel, QWidget, QApplication, QVBoxLayout, QHBoxLayout,
     QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
-    QMenu, QSlider, QToolButton,
+    QMenu, QSlider, QStyle, QStyleOptionSlider, QToolButton,
 )
+
+log = logging.getLogger(__name__)
 
 PLACEHOLDER_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -110,7 +113,7 @@ class CoverLabel(QLabel):
             import os
             dt = (_t.perf_counter() - _t0) * 1000.0
             if dt > 8 and os.environ.get("SRP_DEBUG_PERF") == "1":
-                print(f"[PERF] cover_paint: {dt:.0f}ms")
+                log.debug(f"[PERF] cover_paint: {dt:.0f}ms")
 
     def _paint(self, event):
         pixmap = self.pixmap()
@@ -153,6 +156,41 @@ class CoverLabel(QLabel):
         painter.end()
 
 
+def seek_value_from_position(minimum, maximum, x, span):
+    """Map a horizontal click position to a slider value (absolute seek)."""
+    span = max(1, int(span))
+    lo, hi = int(minimum), int(maximum)
+    ratio = min(max(float(x) / span, 0.0), 1.0)
+    return int(round(lo + (hi - lo) * ratio))
+
+
+class SeekSlider(QSlider):
+    """QSlider whose groove click jumps the handle to the clicked position."""
+
+    clicked_at = pyqtSignal(int)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            option = QStyleOptionSlider()
+            self.initStyleOption(option)
+            handle = self.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider,
+                option,
+                QStyle.SubControl.SC_SliderHandle,
+                self,
+            )
+            if not handle.contains(event.position().toPoint()):
+                value = seek_value_from_position(
+                    self.minimum(), self.maximum(),
+                    event.position().x(), self.width(),
+                )
+                self.setValue(value)
+                self.clicked_at.emit(value)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+
 class VideoSurface(QWidget):
 
     play_toggle_requested = pyqtSignal()
@@ -191,13 +229,14 @@ class VideoSurface(QWidget):
         self._play_btn.setAutoRaise(True)
         self._play_btn.clicked.connect(self._on_play_clicked)
 
-        self._seek = QSlider(Qt.Orientation.Horizontal, self._bar)
+        self._seek = SeekSlider(Qt.Orientation.Horizontal, self._bar)
         self._seek.setObjectName("SeekSlider")
         self._seek.setRange(0, 0)
         self._seek.setEnabled(False)
         self._seek.sliderPressed.connect(self._seek_pressed)
         self._seek.sliderReleased.connect(self._seek_released)
         self._seek.valueChanged.connect(self._seek_value_changed)
+        self._seek.clicked_at.connect(self._seek_clicked)
         self._seek_debounce = QTimer(self)
         self._seek_debounce.setSingleShot(True)
         self._seek_debounce.setInterval(320)
@@ -577,6 +616,15 @@ class VideoSurface(QWidget):
         self._seek_debounce.stop()
         if self._seek_handler:
             self._seek_handler(int(self._seek.value()))
+
+    def _seek_clicked(self, value):
+        """Groove click: seek immediately to the clicked position."""
+        self._seeking = False
+        self._seek_debounce.stop()
+        self._seek_preview = int(value)
+        self._update_time(int(value))
+        if self._seek_handler:
+            self._seek_handler(int(value))
 
     def _open_res_menu(self):
         if self._menu_builder is None:

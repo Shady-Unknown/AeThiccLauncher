@@ -4,6 +4,7 @@ Mostra i dati che abbiamo gia' (master catalog + igdb_meta + cache pagina
 SteamRip) e completa in background con i dettagli IGDB. Il trailer viene
 risolto all'apertura ma riprodotto solo su richiesta.
 """
+import logging
 import html as html_lib
 import os
 import re
@@ -27,16 +28,19 @@ from core.config import save_config
 from core.events import EVENT_TRAILER_WATCHED
 from core.mini_cover_cache import MiniCoverManager
 from core.paths import PathManager
+from core.task_registry import TaskRegistry
 from managers.igdb_details_cache import IgdbDetailsCache
 from managers.playtime_manager import PlaytimeManager
-from managers.save_manager import safe_game_folder_name
-from managers.trailer_manager import TrailerManager
+from core.naming import safe_game_folder_name
+from core.trailer_cache import TrailerManager
 from network.igdb_details_worker import IGDBDetailsWorker
 from network.trailer_downloader import (
     DEFAULT_VARIANT, TrailerDownloadWorker, cached_path,
 )
 from network.trailer_worker import TrailerWorker
 from ui.widgets.discovery_card import VideoSurface
+
+log = logging.getLogger(__name__)
 
 COVER_W = 300
 COVER_H = 450
@@ -85,6 +89,9 @@ class _CoverFetchWorker(QObject):
                     pass
 
         self._thread = threading.Thread(target=run, daemon=True)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track_thread(self._thread)
         self._thread.start()
 
 
@@ -123,6 +130,7 @@ class GameDetailPopup(QWidget):
         self._play_when_ready = False
         self._streaming = False
         self._cover_worker = None
+        self._retired_workers = []
         self._extract_retries = 0
         self._extract_timer = None
         self._extract_pending = False
@@ -137,12 +145,14 @@ class GameDetailPopup(QWidget):
         try:
             mw.installEventFilter(self)
         except Exception:
+            # best-effort: cache/optional wiring is best-effort
             pass
         scraper = getattr(mw, "scraper", None)
         if scraper is not None:
             try:
                 scraper.extract_ready.connect(self._on_extract_ready)
             except Exception:
+                # best-effort: cache/optional wiring is best-effort
                 pass
 
     # ── theme helpers ────────────────────────────────────────────────
@@ -501,13 +511,16 @@ class GameDetailPopup(QWidget):
         QTimer.singleShot(0, lambda: self._kickoff(gen))
 
     def close_popup(self):
+        # Hide first: the window must disappear on the same frame as the click.
+        self._gen += 1
+        self.hide()
         self._stop_download()
         self._teardown_player()
-        self.hide()
         # Evita il "click-through" sulla card sotto il popup.
         try:
             self.mw._discovery_click_guard = time.monotonic() + 0.35
         except Exception:
+            # best-effort: cache/optional wiring is best-effort
             pass
 
     # ── data ─────────────────────────────────────────────────────────
@@ -676,7 +689,7 @@ class GameDetailPopup(QWidget):
         worker.details_ready.connect(
             lambda title, details, g=gen: self._on_details_ready(g, title, details)
         )
-        self._details_worker = worker
+        self._details_worker = self.mw.tasks.track(worker)
         worker.start()
 
     def _on_details_ready(self, gen, title, details):
@@ -716,7 +729,7 @@ class GameDetailPopup(QWidget):
             scraper._popup_extract = self._url
             scraper.extract_game(self._url)
         except Exception as e:
-            print(f"[GameDetail] extract error: {e}")
+            log.exception(f"[GameDetail] extract error: {e}")
             self._extract_pending = False
 
     def _on_extract_ready(self, data):
@@ -731,6 +744,7 @@ class GameDetailPopup(QWidget):
             try:
                 cache[page_url] = dict(data, cached_at=time.time())
             except Exception:
+                # best-effort: cache/optional wiring is best-effort
                 pass
         self._apply_sr_page(data)
 
@@ -773,7 +787,7 @@ class GameDetailPopup(QWidget):
         worker.trailers_ready.connect(
             lambda result, g=gen: self._on_trailer_ready(g, result)
         )
-        self._trailer_worker = worker
+        self._trailer_worker = self.mw.tasks.track(worker)
         worker.start()
 
     def _on_trailer_ready(self, gen, result):
@@ -845,7 +859,7 @@ class GameDetailPopup(QWidget):
             lambda msg, g=gen, w=worker: self._on_download_failed(g, msg, w))
         worker.expired.connect(
             lambda g=gen, w=worker: self._on_download_expired(g, w))
-        self._download_worker = worker
+        self._download_worker = self.mw.tasks.track(worker)
         worker.start()
         # The progress bar stays hidden until the user presses Play.
 
@@ -888,7 +902,7 @@ class GameDetailPopup(QWidget):
     def _on_download_failed(self, gen, msg, worker=None):
         if gen != self._gen or (worker is not None and worker is not self._download_worker):
             return
-        print(f"[GameDetail] trailer download failed: {msg}")
+        log.warning(f"[GameDetail] trailer download failed: {msg}")
         self._hide_trailer_progress()
         # Drop the finished worker reference before retrying: otherwise
         # _play_trailer() sees a "running" worker and waits forever.
@@ -908,7 +922,7 @@ class GameDetailPopup(QWidget):
             return
         self._download_worker = None
         self._hide_trailer_progress()
-        print("[GameDetail] trailer URL expired, refreshing appdetails")
+        log.info("[GameDetail] trailer URL expired, refreshing appdetails")
         if not self._trailer_retried:
             self._trailer_retried = True
             appid = self._trailer_appid()
@@ -963,6 +977,7 @@ class GameDetailPopup(QWidget):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 pixmap.save(path, "JPEG", 88)
             except Exception:
+                # best-effort: cache/optional wiring is best-effort
                 pass
         self._promote_cover_to_mini(pixmap)
 
@@ -974,6 +989,7 @@ class GameDetailPopup(QWidget):
             try:
                 discovery.cover_ready.emit(self._title, file_url)
             except Exception:
+                # best-effort: cache/optional wiring is best-effort
                 pass
 
     def _promote_cover_to_mini(self, pixmap):
@@ -1176,9 +1192,28 @@ class GameDetailPopup(QWidget):
         if worker is not None and worker.isRunning():
             try:
                 worker.stop()
-                worker.wait(1500)
             except RuntimeError:
+                return
+            # Never wait here: a segment/ffmpeg request can take seconds and
+            # used to freeze the popup for ~0.5-1.5 s on close. Keep the worker
+            # alive until it exits; the registry still joins it at shutdown.
+            retired = getattr(self, "_retired_workers", None)
+            if retired is None:
+                retired = self._retired_workers = []
+            retired.append(worker)
+            try:
+                worker.finished.connect(lambda w=worker: self._forget_worker(w))
+            except (RuntimeError, AttributeError):
                 pass
+
+    def _forget_worker(self, worker):
+        retired = getattr(self, "_retired_workers", None)
+        if retired is not None:
+            self._retired_workers = [w for w in retired if w is not worker]
+        try:
+            worker.deleteLater()
+        except RuntimeError:
+            pass
 
     def _teardown_player(self):
         if self._player is not None and not _deleted(self._player):
@@ -1282,7 +1317,7 @@ class GameDetailPopup(QWidget):
         try:
             save_config(cfg)
         except Exception as e:
-            print(f"[GameDetail] config save error: {e}")
+            log.exception(f"[GameDetail] config save error: {e}")
 
     def _toggle_immersive(self):
         self._set_immersive(not self._immersive)
@@ -1394,7 +1429,7 @@ class GameDetailPopup(QWidget):
         if error == QMediaPlayer.Error.NoError:
             return
         if self._selected_url is None or self._falling_back:
-            print(f"[GameDetail] trailer error: {error_string}")
+            log.warning(f"[GameDetail] trailer error: {error_string}")
             return
         self._falling_back = True
         self._selected_url = None
@@ -1480,7 +1515,7 @@ class GameDetailPopup(QWidget):
                 search.setText(url)
                 mw.start_search()
         except Exception as e:
-            print(f"[GameDetail] install handoff error: {e}")
+            log.exception(f"[GameDetail] install handoff error: {e}")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:

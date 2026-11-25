@@ -1,8 +1,11 @@
 """Worker per scaricare/cachare la featured image usata come sfondo."""
+import logging
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.cover_cache import CoverCache
+
+log = logging.getLogger(__name__)
 
 
 class FeaturedImageWorker(QThread):
@@ -23,7 +26,7 @@ class FeaturedImageWorker(QThread):
             try:
                 path = CoverCache.local_path_for(url, allow_placeholder=False) or ""
             except Exception as exc:  # pragma: no cover - rete/filesystem
-                print(f"[Background] featured image failed for {url}: {exc}")
+                log.exception(f"[Background] featured image failed for {url}: {exc}")
             if path:
                 self.ready.emit(url, path)
                 return

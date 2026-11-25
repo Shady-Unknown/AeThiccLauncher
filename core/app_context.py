@@ -26,6 +26,7 @@ class AppContext(QObject):
         self.paths = PathManager
         self.events = EventBus(self)
         self.tasks = TaskRegistry(self)
+        TaskRegistry.set_instance(self.tasks)
         self.state_store = StateStore(self.events)
         self.master_catalog = MasterCatalog(PathManager.get_master_catalog_path(), self)
         self.installed_games: dict = {}

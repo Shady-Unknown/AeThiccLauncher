@@ -7,11 +7,16 @@ Master Catalog and announced on the event bus.
 """
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import QObject
 
 from core.events import EVENT_IGDB_DETAILS_READY
+from core.task_registry import TaskRegistry
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_batch_worker import IGDBBatchWorker
+
+log = logging.getLogger(__name__)
 
 
 class IGDBBatchManager(QObject):
@@ -69,6 +74,7 @@ class IGDBBatchManager(QObject):
                 if sid and str(sid).isdigit():
                     return str(sid)
         except Exception:
+            # best-effort: the worker may already be stopped
             pass
         return ""
 
@@ -123,6 +129,9 @@ class IGDBBatchManager(QObject):
         self._failed = False
         self._running = True
         self._worker = IGDBBatchWorker(jobs, self)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(self._worker)
         self._worker.batch_ready.connect(self._on_ready)
         self._worker.error_occurred.connect(self._on_error)
         self._worker.finished.connect(self._on_finished)
@@ -133,6 +142,7 @@ class IGDBBatchManager(QObject):
             try:
                 self._worker.stop()
             except Exception:
+                # best-effort: the worker may already be stopped
                 pass
 
     # ------------------------------------------------------------------ slots
@@ -162,7 +172,7 @@ class IGDBBatchManager(QObject):
                     for title, details in updates.items():
                         self._details.set(title, details)
             except Exception as exc:
-                print(f"[IGDBBatch] cache update failed: {exc}")
+                log.exception(f"[IGDBBatch] cache update failed: {exc}")
 
         for title, details in found.items():
             self._update_catalog(title, details)
@@ -203,4 +213,4 @@ class IGDBBatchManager(QObject):
         try:
             self._catalog.set_game_field(title, "igdb_meta", merged)
         except Exception as exc:
-            print(f"[IGDBBatch] catalog update failed for '{title}': {exc}")
+            log.exception(f"[IGDBBatch] catalog update failed for '{title}': {exc}")

@@ -25,19 +25,36 @@ class BackupService:
             meta = installed.get(title)
             if not meta:
                 continue
-            if self.savegames.backup_on_demand(meta):
-                report['synced_games'] += 1
+            try:
+                if self.savegames.backup_on_demand(meta):
+                    report['synced_games'] += 1
+            except (OSError, RuntimeError, ValueError) as exc:
+                report['errors'].append(f"{title}: {exc}")
         return report
 
     def backup_state(self, push=True):
-        """Snapshot launcher state (achievements, stats, preferences)."""
+        """Snapshot launcher state (achievements, stats, preferences).
+
+        The mirror push is non-blocking: when the coordinator is busy the push
+        is skipped and reported as such, because the mirror only ever mirrors
+        the local truth and the next savegames operation will push again.
+        """
         if self.state is None:
             return {'ok': False, 'reason': 'not_configured'}
         try:
             path = self.state.snapshot()
         except Exception as exc:
             return {'ok': False, 'reason': 'error', 'detail': str(exc)}
-        mirror = self.savegames.push_mirror() if push else {}
+        mirror = {}
+        if push:
+            result = self.savegames.try_push_mirror(timeout_ms=0)
+            status = result.get('status', 'failed')
+            if status == 'completed':
+                mirror = dict(result.get('report') or {})
+                mirror['status'] = 'completed'
+            else:
+                mirror = {'status': status,
+                          'report': result.get('report') or {}}
         return {
             'ok': path is not None,
             'snapshot': path.name if path is not None else '',
@@ -61,12 +78,25 @@ class BackupService:
     def list_snapshots(self, title):
         return self.savegames.list_snapshots(title)
 
+    def try_list_snapshots(self, title, timeout_ms=0):
+        try:
+            return self.savegames.try_list_snapshots(title, timeout_ms=timeout_ms)
+        except AttributeError:
+            return {'status': 'completed',
+                    'snapshots': self.savegames.list_snapshots(title)}
+
     def status(self, meta=None):
         meta = meta or {}
         title = str(meta.get('title') or meta.get('game_title') or '')
-        snapshots = self.list_snapshots(title) if title else []
+        result = self.try_list_snapshots(title) if title else {
+            'status': 'completed', 'snapshots': []}
+        if not isinstance(result, dict):
+            result = {'status': 'completed',
+                      'snapshots': self.list_snapshots(title)}
+        snapshots = result.get('snapshots') or []
         destination = self.savegames.get_source_save_path(meta) if meta else ''
         return {
+            'status': result.get('status', 'completed'),
             'snapshots': len(snapshots),
             'latest': snapshots[0]['id'] if snapshots else '',
             'destination': destination,

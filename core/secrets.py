@@ -7,10 +7,16 @@ Priority (first non-empty value wins):
 3. encrypted fallback file ``secrets.json`` in the data root
    - Windows: DPAPI (per-user encryption)
    - Linux/macOS: plain values in a ``0600`` file (keyring is the normal path)
+4. legacy local ``API_Keys.txt`` next to the executable (private/dev builds only)
+
+The public clone sets ``ALLOW_DEV_KEYS_FILE = False`` and does not ship the
+file; it only uses keyring + fallback.
 
 No credential is ever written to ``config.json`` or logged.
 """
 from __future__ import annotations
+
+import logging
 
 import base64
 import json
@@ -20,10 +26,15 @@ from pathlib import Path
 
 import requests
 
+from core.atomic_io import atomic_write_json
 from core.paths import PathManager
+
+log = logging.getLogger(__name__)
 
 SERVICE_NAME = "AeThiccLauncher"
 SECRETS_FILENAME = "secrets.json"
+DEV_KEYS_FILENAMES = ("API_Keys.txt", "igdb.txt")
+ALLOW_DEV_KEYS_FILE = False
 
 SGDB_API_KEY = "sgdb_api_key"
 IGDB_CLIENT_ID = "igdb_client_id"
@@ -90,6 +101,7 @@ def _keyring_delete(name: str) -> None:
     try:
         kr.delete_password(SERVICE_NAME, name)
     except Exception:
+        # best-effort: keyring may be unavailable; the file fallback is next
         pass
 
 
@@ -137,7 +149,7 @@ def _encode_file_value(value: str) -> str:
         try:
             return "dpapi:" + base64.b64encode(_dpapi(value.encode("utf-8"), True)).decode("ascii")
         except Exception as exc:
-            print(f"[Secrets] DPAPI encrypt failed: {exc}")
+            log.exception(f"[Secrets] DPAPI encrypt failed: {exc}")
     return value
 
 
@@ -149,7 +161,7 @@ def _decode_file_value(value: str) -> str:
             raw = base64.b64decode(value[6:])
             return _dpapi(raw, False).decode("utf-8", errors="replace")
         except Exception as exc:
-            print(f"[Secrets] DPAPI decrypt failed: {exc}")
+            log.exception(f"[Secrets] DPAPI decrypt failed: {exc}")
             return ""
     return value
 
@@ -174,18 +186,13 @@ def _read_file_store() -> dict[str, str]:
 def _write_file_store(store: dict[str, str]) -> bool:
     path = _secrets_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {name: _encode_file_value(value) for name, value in store.items() if value}
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        if os.name != "nt":
-            os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        atomic_write_json(path, payload, indent=2)
         if os.name != "nt":
             os.chmod(path, 0o600)
         return True
     except OSError as exc:
-        print(f"[Secrets] Cannot write {path}: {exc}")
+        log.exception(f"[Secrets] Cannot write {path}: {exc}")
         return False
 
 
@@ -206,6 +213,79 @@ def _file_delete(name: str) -> None:
         _write_file_store(store)
 
 
+# ── legacy dev keys file ─────────────────────────────────────────────
+
+def _label_to_key(text: str) -> str:
+    low = (text or "").strip().lower()
+    if not low:
+        return ""
+    if "steamgriddb" in low or "sgdb" in low:
+        return SGDB_API_KEY
+    if "igdb" in low and "secret" in low:
+        return IGDB_CLIENT_SECRET
+    if "igdb" in low and "id" in low:
+        return IGDB_CLIENT_ID
+    return ""
+
+
+def _dev_keys_path() -> Path | None:
+    if not ALLOW_DEV_KEYS_FILE:
+        return None
+    try:
+        from core.config import get_base_dir
+        base = Path(get_base_dir())
+    except Exception:
+        return None
+    for name in DEV_KEYS_FILENAMES:
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_dev_keys() -> dict[str, str]:
+    path = _dev_keys_path()
+    if path is None:
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return {}
+
+    result: dict[str, str] = {}
+    lines = [line.strip() for line in text.splitlines()]
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line or line.startswith("#"):
+            continue
+        label_part = line
+        value_part = ""
+        if ":" in line:
+            label_part, value_part = line.split(":", 1)
+        elif "=" in line:
+            label_part, value_part = line.split("=", 1)
+        key = _label_to_key(label_part)
+        if not key:
+            continue
+        value = value_part.strip()
+        if not value:
+            while index < len(lines):
+                candidate = lines[index].strip()
+                index += 1
+                if candidate and not candidate.startswith("#"):
+                    value = candidate
+                    break
+        if value:
+            result[key] = value
+    return result
+
+
+def _dev_get(name: str) -> str:
+    return _read_dev_keys().get(name, "")
+
+
 # ── public API ───────────────────────────────────────────────────────
 
 def get_secret(name: str) -> str:
@@ -224,8 +304,9 @@ def get_secret(name: str) -> str:
     if value:
         _value_cache[name] = value
         return value
-    _value_cache[name] = ""
-    return ""
+    value = _dev_get(name)
+    _value_cache[name] = value
+    return value
 
 
 def secret_source(name: str) -> str:
@@ -236,6 +317,8 @@ def secret_source(name: str) -> str:
         return "keyring"
     if _file_get(name):
         return "file"
+    if _dev_get(name):
+        return "devfile"
     return ""
 
 

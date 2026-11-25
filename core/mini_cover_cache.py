@@ -1,3 +1,4 @@
+import logging
 import os
 from PIL import Image
 from PyQt6.QtCore import Qt, QUrl
@@ -5,7 +6,9 @@ from PyQt6.QtGui import QPixmap
 
 from core.paths import PathManager
 from core.cover_cache import to_file_url
-from managers.save_manager import safe_game_folder_name
+from core.naming import safe_game_folder_name
+
+log = logging.getLogger(__name__)
 
 MINI_W = 200
 MINI_H = 300
@@ -85,7 +88,7 @@ class MiniCoverManager:
         try:
             scaled.save(local_path, "JPEG", 85)
         except Exception as e:
-            print("[MiniCover] Failed to persist pixmap: {}".format(e))
+            log.exception("[MiniCover] Failed to persist pixmap: {}".format(e))
             return None
         if sync_folder:
             try:
@@ -97,7 +100,7 @@ class MiniCoverManager:
                     "JPEG", 85,
                 )
             except Exception as e:
-                print("[MiniCover] Failed to save sync pixmap: {}".format(e))
+                log.exception("[MiniCover] Failed to save sync pixmap: {}".format(e))
         return to_file_url(local_path)
 
     @staticmethod
@@ -128,7 +131,7 @@ class MiniCoverManager:
             scaled.save(local_path, "JPEG", 85)
             success = True
         except Exception as e:
-            print("[MiniCover] Failed to save local cache: {}".format(e))
+            log.exception("[MiniCover] Failed to save local cache: {}".format(e))
 
         sync_game_dir = os.path.join(sync_folder, safe_title)
         os.makedirs(sync_game_dir, exist_ok=True)
@@ -137,7 +140,7 @@ class MiniCoverManager:
             scaled.save(sync_path, "JPEG", 85)
             success = True
         except Exception as e:
-            print("[MiniCover] Failed to save sync folder: {}".format(e))
+            log.exception("[MiniCover] Failed to save sync folder: {}".format(e))
 
         return success
 

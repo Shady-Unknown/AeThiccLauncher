@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -37,7 +38,10 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from core.task_registry import TaskRegistry
+from ui.savegames_worker import SavegamesTaskWorker
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -56,12 +60,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -86,16 +89,86 @@ from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
 
+log = logging.getLogger(__name__)
+
 # --- APP WINDOW PRINCIPALE ---
 
 class LibraryController:
+    def _run_savegames_task(self, task, on_done, surface_errors=True):
+        """Run a savegames operation in a worker; never waits on the GUI thread.
+
+        Busy locks only delay the worker (the coordinator serializes), so the
+        GUI keeps painting. Cancellation during shutdown is silent; failures
+        are logged and, for user-initiated actions, surfaced with a dialog.
+        """
+        def _task():
+            from managers.save_coordinator import OperationCancelled
+            try:
+                return task()
+            except OperationCancelled:
+                return None
+
+        def _finished(result):
+            if result is not None and on_done is not None:
+                on_done(result)
+
+        def _failed(message):
+            log.warning(f"[Savegames] Background operation failed: {message}")
+            if surface_errors:
+                QMessageBox.critical(
+                    self, "Savegames",
+                    f"The savegame operation failed:\n\n{message}",
+                )
+
+        worker = SavegamesTaskWorker(_task, self)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
+        worker.finished_ok.connect(_finished)
+        worker.failed.connect(_failed)
+        worker.start()
+        return True
+
+    def ensure_save_path_async(self, meta, on_done=None):
+        """Detect in a worker, prompt on the GUI thread, commit in a worker.
+
+        The modal prompt therefore never runs while the coordinator lock is
+        held, and the commit revalidates the game and the path state captured
+        before the dialog.
+        """
+        def _on_prepared(prepared):
+            if prepared is None:
+                return
+            if not prepared.get('needs_prompt'):
+                if on_done is not None:
+                    on_done(prepared.get('meta', meta))
+                return
+            manual_path = self.savegames_manager.prompt_manual_save_path(
+                prepared['title'])
+            if not manual_path:
+                if on_done is not None:
+                    on_done(meta)
+                return
+
+            def _commit():
+                return self.savegames_manager.commit_manual_save_path(
+                    meta, manual_path, prepared['state'], prepared['title'],
+                    tracked=prepared.get('tracked', False))
+
+            self._run_savegames_task(_commit, on_done)
+
+        return self._run_savegames_task(
+            lambda: self.savegames_manager.prepare_save_path_for_game(meta),
+            _on_prepared,
+        )
+
     def _update_library_item_from_bg(self, game_title, meta, status):
         # Se lo scanner ha trovato un update, invalida la cache di sessione
         if meta and "Update available" in status:
             source_url = meta.get('source_url', '').rstrip('/')
             if source_url and source_url in self.session_cache:
                 del self.session_cache[source_url]
-                print(f"[App] Invalidated session cache for '{game_title}' (background update detected)")
+                log.info(f"[App] Invalidated session cache for '{game_title}' (background update detected)")
         item = self.lib_manager._find_item_by_title(game_title)
         if item:
             self.lib_manager._update_library_item(item, game_title, status, meta=meta)
@@ -154,10 +227,13 @@ class LibraryController:
             return
 
         if not meta.get('savegame_path_win') and not meta.get('savegame_path_linux'):
-            self.savegames_manager.ensure_save_path_for_game(meta)
-            self.lib_manager._update_library_item(item, raw_title, "Installed", meta=meta, game_title=raw_title)
-            if hasattr(self, 'savegames_tab'):
-                self.savegames_tab.refresh_view()
+            def _save_path_ready(_prepared):
+                self.lib_manager._update_library_item(
+                    item, raw_title, "Installed", meta=meta, game_title=raw_title)
+                if hasattr(self, 'savegames_tab'):
+                    self.savegames_tab.refresh_view()
+
+            self.ensure_save_path_async(meta, _save_path_ready)
 
         self.clear_links()
         self.current_game_data = {} 
@@ -178,13 +254,13 @@ class LibraryController:
         if clean_url in self.session_cache:
             cached = self.session_cache[clean_url]
             if self._is_cache_stale_for_installed_game(cached, raw_title):
-                print(f"[App] Cache stale for '{raw_title}', forcing re-fetch")
+                log.info(f"[App] Cache stale for '{raw_title}', forcing re-fetch")
                 del self.session_cache[clean_url]
                 self.start_search()
             else:
                 self.lbl_game_title.setText(f"Loading {raw_title} from cache...")
                 if os.environ.get("SRP_PROFILE"):
-                    print(f"[Perf] on_library_item_clicked pre-display: {(time.perf_counter() - _click_t0) * 1000:.0f} ms")
+                    log.debug(f"[Perf] on_library_item_clicked pre-display: {(time.perf_counter() - _click_t0) * 1000:.0f} ms")
                 self.display_game_data(cached)
         else:
             self.start_search()
@@ -339,16 +415,10 @@ class LibraryController:
                 QMessageBox.warning(self, "No Backup Folder", "Backup saves folder is not available for this game. Run a save sync first.")
 
         elif action == rescan_save_action:
-            updated_meta = self.savegames_manager.rescan_save_folder(meta)
-            
-            if updated_meta:
-                resolved_path = self.savegames_manager.get_source_save_path(updated_meta)
-                if resolved_path and os.path.exists(resolved_path):
-                    QMessageBox.information(self, "Save Folder Rescanned",
-                        "Save path has been refreshed from the manifest and steamrip_meta.json has been updated.")
-                    self.lib_manager._update_library_item(item, raw_title, "Installed", meta=updated_meta, game_title=raw_title)
-                else:
-                    self._prompt_save_path_fallback(raw_title, updated_meta, item)
+            self._run_savegames_task(
+                lambda: self.savegames_manager.rescan_save_folder(meta),
+                lambda updated: self._on_rescan_done(updated, raw_title, item),
+            )
 
         elif action == point_save_action:
             self._set_custom_save_path_for_game(raw_title, meta, item)
@@ -391,7 +461,7 @@ class LibraryController:
                         try:
                             steam_integration.remove_from_steam(raw_title, restart_steam=restart_dialog.restart_now)
                         except Exception as e:
-                            print(f"[Steam] Errore durante la rimozione da Steam: {e}")
+                            log.exception(f"[Steam] Errore durante la rimozione da Steam: {e}")
 
                 if hasattr(self, 'savegames_manager'):
                     self.savegames_manager.persist_mini_cover_on_uninstall(raw_title, meta)
@@ -500,16 +570,11 @@ class LibraryController:
         clicked = msg.clickedButton()
 
         if clicked == btn_scan:
-            updated_meta = self.savegames_manager.rescan_save_folder(meta)
-            if updated_meta:
-                new_path = self.savegames_manager.get_source_save_path(updated_meta)
-                if new_path and os.path.exists(new_path):
-                    self.open_local_path(new_path)
-                    self.lib_manager._update_library_item(item, raw_title, "Installed", meta=updated_meta, game_title=raw_title)
-                    return
-            QMessageBox.information(self, "Still Not Found",
-                "Manifest scan completed but no save path was found.\n"
-                "Try 'Web Search' or 'Browse to Folder'.")
+            self._run_savegames_task(
+                lambda: self.savegames_manager.rescan_save_folder(meta),
+                lambda updated: self._on_manifest_scan_done(
+                    updated, raw_title, item),
+            )
 
         elif clicked == btn_web:
             query = quote(f"{raw_title} save files location")
@@ -540,6 +605,31 @@ class LibraryController:
                 if hasattr(self, 'savegames_tab'):
                     self.savegames_tab.refresh_view()
                 self._update_desc_custom_save_path(meta)
+
+    def _on_rescan_done(self, updated_meta, raw_title, item):
+        if not updated_meta:
+            return
+        resolved_path = self.savegames_manager.get_source_save_path(updated_meta)
+        if resolved_path and os.path.exists(resolved_path):
+            QMessageBox.information(self, "Save Folder Rescanned",
+                "Save path has been refreshed from the manifest and steamrip_meta.json has been updated.")
+            self.lib_manager._update_library_item(item, raw_title, "Installed",
+                                                  meta=updated_meta, game_title=raw_title)
+        else:
+            self._prompt_save_path_fallback(raw_title, updated_meta, item)
+
+    def _on_manifest_scan_done(self, updated_meta, raw_title, item):
+        if updated_meta:
+            new_path = self.savegames_manager.get_source_save_path(updated_meta)
+            if new_path and os.path.exists(new_path):
+                self.open_local_path(new_path)
+                self.lib_manager._update_library_item(
+                    item, raw_title, "Installed", meta=updated_meta,
+                    game_title=raw_title)
+                return
+        QMessageBox.information(self, "Still Not Found",
+            "Manifest scan completed but no save path was found.\n"
+            "Try 'Web Search' or 'Browse to Folder'.")
 
     def _get_game_backup_folder(self, raw_title):
         sync_folder = self.savegames_manager.get_sync_folder()
@@ -574,7 +664,7 @@ class LibraryController:
                 title = cached.get('title', '')
                 # 1. Versione installata diversa → re-fetch obbligatorio
                 if title and self._is_cache_stale_for_installed_game(cached, title):
-                    print(f"[App] Cache stale per '{title}' (versione diversa), re-fetch forzato")
+                    log.info(f"[App] Cache stale per '{title}' (versione diversa), re-fetch forzato")
                     del self.session_cache[clean_url]
                 else:
                     # Niente HEAD sincrono: decidiamo sul TTL e, se scaduto,
@@ -587,7 +677,7 @@ class LibraryController:
                         self._check_page_freshness_async(clean_url, cached)
                         self.display_game_data(cached)
                         return
-                    print(f"[App] Cache potenzialmente stale per '{title}' "
+                    log.info(f"[App] Cache potenzialmente stale per '{title}' "
                           f"(age={int(time.time()-cached_at)}s), re-extract in background")
                     self.db_progress.hide()
                     self.display_game_data(cached)

@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from core import save_paths
+from managers import save_locations as save_locations_module
 from managers import save_manager as save_manager_module
 from managers.save_manager import SavegamesManager
 
@@ -39,7 +40,7 @@ class LinuxPathDetectionTests(unittest.TestCase):
 class TranslateWinPathTests(unittest.TestCase):
     def test_no_translation_off_linux(self):
         manager = make_manager()
-        with mock.patch.object(save_manager_module.platform_info, "is_linux", return_value=False), \
+        with mock.patch.object(save_locations_module.platform_info, "is_linux", return_value=False), \
                 mock.patch.object(SavegamesManager, "_get_compatdata_base", return_value=COMPATDATA_BASE):
             result = manager.translate_win_path_to_linux(
                 "%userprofile%\\My Documents\\inZOI\\SaveGames", "4092316751"
@@ -48,7 +49,7 @@ class TranslateWinPathTests(unittest.TestCase):
 
     def test_userprofile_my_documents_maps_to_documents(self):
         manager = make_manager()
-        with mock.patch.object(save_manager_module.platform_info, "is_linux", return_value=True), \
+        with mock.patch.object(save_locations_module.platform_info, "is_linux", return_value=True), \
                 mock.patch.object(SavegamesManager, "_get_compatdata_base", return_value=COMPATDATA_BASE):
             result = manager.translate_win_path_to_linux(
                 "%userprofile%\\My Documents\\inZOI\\SaveGames", "4092316751"
@@ -64,7 +65,7 @@ class TranslateWinPathTests(unittest.TestCase):
 
     def test_localappdata_maps_to_appdata_local(self):
         manager = make_manager()
-        with mock.patch.object(save_manager_module.platform_info, "is_linux", return_value=True), \
+        with mock.patch.object(save_locations_module.platform_info, "is_linux", return_value=True), \
                 mock.patch.object(SavegamesManager, "_get_compatdata_base", return_value=COMPATDATA_BASE):
             result = manager.translate_win_path_to_linux(
                 "%localappdata%\\inZOI\\SaveGames", "4092316751"
@@ -78,7 +79,7 @@ class TranslateWinPathTests(unittest.TestCase):
 
     def test_requires_grid_id(self):
         manager = make_manager()
-        with mock.patch.object(save_manager_module.platform_info, "is_linux", return_value=True):
+        with mock.patch.object(save_locations_module.platform_info, "is_linux", return_value=True):
             result = manager.translate_win_path_to_linux("%userprofile%\\Documents\\inZOI", "")
         self.assertEqual(result, "")
 

@@ -4,6 +4,13 @@ The local store (``Staging``) is always the source of truth. The mirror is a
 second copy in another folder (external drive, a Google Drive Desktop folder,
 ...) that is only ever written *from* the local store and never deletes
 anything: an interrupted or misconfigured mirror cannot damage the backups.
+
+A snapshot is PUBLISHED on the mirror only when its directory exists there,
+``snapshot.json`` is present and not marked incomplete, and (for an id that
+also exists locally) the relative file set, sizes and symlink targets match.
+Known limits: the same snapshot id with different content on two devices
+overwrites the mirror copy, and verification compares sizes, not content
+hashes, so a same-size change on the mirror is not detected.
 """
 from __future__ import annotations
 
@@ -11,6 +18,8 @@ import json
 import os
 import shutil
 import time
+
+from core.atomic_io import atomic_write_json
 
 MIRROR_SCHEMA = 1
 MIRROR_MANIFEST = "backup_manifest.json"
@@ -35,16 +44,6 @@ def _read_json(path):
     return data if isinstance(data, dict) else {}
 
 
-def _write_json_atomic(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
 def _game_roots(root):
     try:
         names = os.listdir(root)
@@ -63,43 +62,113 @@ def _manifest(root, safe_title):
     return _read_json(os.path.join(root, safe_title, "savegames.json"))
 
 
-def _snapshot_ids(root, safe_title, manifest):
-    ids = []
-    for entry in manifest.get("snapshots") or []:
-        if isinstance(entry, dict) and entry.get("id"):
-            ids.append(str(entry["id"]))
-    if ids:
-        return sorted(ids)
-
+def _snapshot_dirs(root, safe_title):
+    """Real snapshot directories (legacy snapshots without metadata included)."""
     saves = os.path.join(root, safe_title, "saves")
     try:
-        return sorted(
-            name for name in os.listdir(saves)
-            if not name.startswith(".") and not name.endswith(".tmp")
-            and os.path.isdir(os.path.join(saves, name))
-        )
+        names = os.listdir(saves)
     except OSError:
         return []
+    return sorted(
+        name for name in names
+        if not name.startswith(".") and not name.endswith(".tmp")
+        and os.path.isdir(os.path.join(saves, name))
+    )
 
 
-def _latest_snapshot(root, safe_title, manifest, ids):
-    latest = str(manifest.get("latest_snapshot") or "").strip()
-    if latest.startswith("saves/"):
-        latest = latest[len("saves/"):]
-    if latest:
-        return latest
+def _snapshot_info(snapshot_dir):
+    return _read_json(os.path.join(snapshot_dir, "snapshot.json"))
+
+
+def _snapshot_complete(snapshot_dir):
+    """A snapshot is publishable only with metadata saying it is complete.
+
+    Legacy local snapshots without ``snapshot.json`` stay visible in the local
+    store but are never published: the mirror only advertises verified
+    snapshots, and new snapshots always carry the metadata.
+    """
+    info = _snapshot_info(snapshot_dir)
+    return bool(info) and info.get("complete", True) is not False
+
+
+def _file_manifest(root):
+    """Relative path -> ('link', target) | ('file', size); None on OSError.
+
+    Verification compares the file set and sizes, not content hashes (see the
+    known limits in the module docstring).
+    """
+    entries = {}
+    try:
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            rel_root = os.path.relpath(dirpath, root)
+            for name in list(dirnames):
+                full = os.path.join(dirpath, name)
+                if not os.path.islink(full):
+                    continue
+                rel = name if rel_root == "." else os.path.join(rel_root, name)
+                entries[rel] = ("link", os.readlink(full))
+                dirnames.remove(name)
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                rel = name if rel_root == "." else os.path.join(rel_root, name)
+                if os.path.islink(full):
+                    entries[rel] = ("link", os.readlink(full))
+                else:
+                    entries[rel] = ("file", os.path.getsize(full))
+    except OSError:
+        return None
+    return entries
+
+
+def _same_snapshot(local_dir, mirror_dir):
+    local = _file_manifest(local_dir)
+    mirror = _file_manifest(mirror_dir)
+    return local is not None and local == mirror
+
+
+def _published_ids(local_root, mirror_root, safe_title):
+    """Mirror snapshot ids that are actually published.
+
+    A snapshot is published only if its directory exists on the mirror,
+    ``snapshot.json`` is present and complete, and — when the same id exists
+    locally — the relative file set, sizes and symlink targets match. Ids are
+    never taken from a manifest: a partial push must not be advertised.
+
+    Known limitation: a legacy local snapshot without ``snapshot.json`` is
+    never published (the mirror cannot verify it), so old games may stay
+    local-only until a new snapshot is written.
+    """
+    ids = []
+    for snapshot_id in _snapshot_dirs(mirror_root, safe_title):
+        mirror_dir = os.path.join(mirror_root, safe_title, "saves", snapshot_id)
+        if not _snapshot_complete(mirror_dir):
+            continue
+        local_dir = os.path.join(local_root, safe_title, "saves", snapshot_id)
+        if os.path.isdir(local_dir) and not _same_snapshot(local_dir, mirror_dir):
+            continue
+        ids.append(snapshot_id)
+    return sorted(ids)
+
+
+def _latest_snapshot(ids):
     return ids[-1] if ids else ""
 
 
-def _game_version(root, safe_title, manifest, latest):
-    info = manifest.get("game_version")
-    if isinstance(info, dict) and (info.get("build") or info.get("label")):
-        return info
+def _snapshot_version(root, safe_title, latest):
     if not latest:
         return {}
-    data = _read_json(os.path.join(root, safe_title, "saves", latest, "snapshot.json"))
+    data = _read_json(os.path.join(
+        root, safe_title, "saves", latest, "snapshot.json"))
     version = data.get("version")
     return version if isinstance(version, dict) else {}
+
+
+def _game_version(root, safe_title, manifest, latest):
+    version = _snapshot_version(root, safe_title, latest)
+    if version:
+        return version
+    info = manifest.get("game_version")
+    return info if isinstance(info, dict) else {}
 
 
 class FolderMirrorBackend:
@@ -141,9 +210,16 @@ class FolderMirrorBackend:
 
     # --------------------------------------------------------------- push
 
-    def push(self, exclude_names=()):
-        """Copy new/changed files from local to mirror. Never deletes."""
-        report = {"configured": True, "copied": 0, "skipped": 0, "errors": []}
+    def push(self, exclude_names=(), should_cancel=None):
+        """Copy new/changed files from local to mirror. Never deletes.
+
+        ``should_cancel`` is polled between files: every file is copied
+        atomically, so stopping between two files leaves the mirror consistent.
+        Nothing is ever deleted, and the caller must not write the mirror
+        manifest when ``report['cancelled']`` is true.
+        """
+        report = {"configured": True, "copied": 0, "skipped": 0,
+                  "cancelled": False, "errors": []}
         if not self.is_configured():
             report["configured"] = False
             return report
@@ -153,8 +229,27 @@ class FolderMirrorBackend:
         if not os.path.isdir(self.local_root):
             report["errors"].append("Local backup folder does not exist.")
             return report
+        if should_cancel is not None and should_cancel():
+            report["cancelled"] = True
+            return report
 
         exclude = set(exclude_names or ()) | set(MIRROR_EXCLUDED_ROOT_FILES)
+        incomplete_cache = {}
+
+        def is_incomplete(rel_root):
+            parts = rel_root.split(os.sep) if rel_root != "." else []
+            if len(parts) < 3 or parts[1] != "saves":
+                return False
+            game = parts[0]
+            snapshot_id = parts[2]
+            if game not in incomplete_cache:
+                incomplete_cache[game] = {
+                    name for name in _snapshot_dirs(self.local_root, game)
+                    if not _snapshot_complete(os.path.join(
+                        self.local_root, game, "saves", name))
+                }
+            return snapshot_id in incomplete_cache[game]
+
         for root, dirs, files in os.walk(self.local_root):
             dirs[:] = sorted(
                 name for name in dirs
@@ -162,6 +257,10 @@ class FolderMirrorBackend:
                 and (not name.startswith(".") or name in MIRROR_ALLOWED_HIDDEN_DIRS)
             )
             rel_root = os.path.relpath(root, self.local_root)
+            if is_incomplete(rel_root):
+                # Never publish an incomplete snapshot.
+                dirs[:] = []
+                continue
             target_root = (self.mirror_root if rel_root == "."
                            else os.path.join(self.mirror_root, rel_root))
             try:
@@ -171,6 +270,9 @@ class FolderMirrorBackend:
                 continue
 
             for name in sorted(files, key=str.lower):
+                if should_cancel is not None and should_cancel():
+                    report["cancelled"] = True
+                    return report
                 if name.endswith(".tmp"):
                     continue
                 if rel_root == "." and (name.startswith(".") or name in exclude):
@@ -203,6 +305,19 @@ class FolderMirrorBackend:
             return report
 
         exclude = set(exclude_names or ()) | set(MIRROR_EXCLUDED_ROOT_FILES)
+        published_cache = {}
+
+        def is_unpublished(rel_root):
+            parts = rel_root.split(os.sep) if rel_root != "." else []
+            if len(parts) < 3 or parts[1] != "saves":
+                return False
+            game = parts[0]
+            snapshot_id = parts[2]
+            if game not in published_cache:
+                published_cache[game] = set(
+                    _published_ids(self.local_root, self.mirror_root, game))
+            return snapshot_id not in published_cache[game]
+
         for root, dirs, files in os.walk(self.mirror_root):
             dirs[:] = sorted(
                 name for name in dirs
@@ -210,6 +325,10 @@ class FolderMirrorBackend:
                 and (not name.startswith(".") or name in MIRROR_ALLOWED_HIDDEN_DIRS)
             )
             rel_root = os.path.relpath(root, self.mirror_root)
+            if is_unpublished(rel_root):
+                # An incomplete or partial mirror snapshot is never imported.
+                dirs[:] = []
+                continue
             target_root = (self.local_root if rel_root == "."
                            else os.path.join(self.local_root, rel_root))
             try:
@@ -246,12 +365,11 @@ class FolderMirrorBackend:
         for safe_title in sorted(local_games | mirror_games, key=str.lower):
             local_manifest = _manifest(self.local_root, safe_title)
             mirror_manifest = _manifest(self.mirror_root, safe_title)
-            local_ids = _snapshot_ids(self.local_root, safe_title, local_manifest)
-            mirror_ids = _snapshot_ids(self.mirror_root, safe_title, mirror_manifest)
-            local_latest = _latest_snapshot(
-                self.local_root, safe_title, local_manifest, local_ids)
-            mirror_latest = _latest_snapshot(
-                self.mirror_root, safe_title, mirror_manifest, mirror_ids)
+            local_ids = _snapshot_dirs(self.local_root, safe_title)
+            mirror_ids = _published_ids(
+                self.local_root, self.mirror_root, safe_title)
+            local_latest = _latest_snapshot(local_ids)
+            mirror_latest = _latest_snapshot(mirror_ids)
 
             if safe_title not in local_games:
                 state = STATE_MIRROR_ONLY
@@ -293,18 +411,25 @@ class FolderMirrorBackend:
     # ----------------------------------------------------------- manifest
 
     def write_manifest(self, device_id=""):
-        """Describe what the mirror currently contains (informational)."""
+        """Describe what the mirror actually contains (informational).
+
+        Built from the mirror tree: only published snapshots are listed, and a
+        game with no published snapshot is omitted rather than advertised from
+        a stale local manifest.
+        """
         games = {}
-        for safe_title in _game_roots(self.local_root):
-            manifest = _manifest(self.local_root, safe_title)
-            ids = _snapshot_ids(self.local_root, safe_title, manifest)
-            latest = _latest_snapshot(self.local_root, safe_title, manifest, ids)
+        for safe_title in _game_roots(self.mirror_root):
+            ids = _published_ids(self.local_root, self.mirror_root, safe_title)
+            if not ids:
+                continue
+            manifest = _manifest(self.mirror_root, safe_title)
+            latest = _latest_snapshot(ids)
             games[safe_title] = {
                 "game_title": manifest.get("game_title") or safe_title,
                 "latest_snapshot": latest,
                 "last_synced": str(manifest.get("last_synced") or ""),
                 "game_version": _game_version(
-                    self.local_root, safe_title, manifest, latest),
+                    self.mirror_root, safe_title, manifest, latest),
             }
 
         payload = {
@@ -313,7 +438,8 @@ class FolderMirrorBackend:
             "device_id": str(device_id or ""),
             "games": games,
         }
-        _write_json_atomic(os.path.join(self.mirror_root, MIRROR_MANIFEST), payload)
+        atomic_write_json(os.path.join(self.mirror_root, MIRROR_MANIFEST),
+                          payload, indent=4)
         return payload
 
     # ------------------------------------------------------------ helpers

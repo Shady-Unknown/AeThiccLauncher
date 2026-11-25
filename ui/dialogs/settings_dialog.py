@@ -4,7 +4,7 @@ import tempfile
 import time
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QListWidget, QStackedWidget, QVBoxLayout, QPushButton, QWidget, QFormLayout, QLineEdit, QFileDialog, QLabel, QSpinBox, QComboBox, QColorDialog, QCheckBox, QInputDialog, QMessageBox, QSlider
+from PyQt6.QtWidgets import QApplication, QDialog, QHBoxLayout, QListWidget, QStackedWidget, QVBoxLayout, QPushButton, QWidget, QFormLayout, QLineEdit, QFileDialog, QLabel, QSpinBox, QComboBox, QColorDialog, QCheckBox, QInputDialog, QMessageBox, QSlider
 from core import config as style_settings
 from ui.widgets.api_keys_form import ApiKeysForm
 
@@ -50,6 +50,7 @@ class SettingsDialog(QDialog):
         self.sidebar.addItem("Game Libraries")
         self.sidebar.addItem("Savegames Manager")
         self.sidebar.addItem("API Keys")
+        self.sidebar.addItem("Diagnostics")
         main_layout.addWidget(self.sidebar)
 
         self.pages_container = QStackedWidget()
@@ -60,6 +61,7 @@ class SettingsDialog(QDialog):
         self.create_folders_page()
         self.create_savegames_page()
         self.create_api_keys_page()
+        self.create_diagnostics_page()
 
         self.sidebar.currentRowChanged.connect(self.pages_container.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -348,6 +350,15 @@ class SettingsDialog(QDialog):
         self.spin_keep_snapshots.setValue(max(1, keep_value))
         layout.addRow("Snapshots to keep:", self.spin_keep_snapshots)
 
+        self.chk_snapshot_hash = QCheckBox(
+            "Hash save contents for exact duplicate detection "
+            "(slower on large saves, up to 64 MB)"
+        )
+        self.chk_snapshot_hash.setChecked(bool(
+            self.config.get('savegames', {}).get('snapshot_hash', False)
+        ))
+        layout.addRow(self.chk_snapshot_hash)
+
         self.chk_state_backup = QCheckBox(
             "Back up launcher data (achievements, stats, preferences)"
         )
@@ -419,6 +430,86 @@ class SettingsDialog(QDialog):
         self.api_form = ApiKeysForm(page)
         layout.addWidget(self.api_form)
         self.pages_container.addWidget(page)
+
+    def create_diagnostics_page(self):
+        import platform
+
+        from core.paths import PathManager
+        from core.version import __version__
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        note = QLabel(
+            "Logs record startup, downloads, Steam integration and shutdown. "
+            "They are redacted and never contain API keys."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #ffcc66; font-size: 11px;")
+        layout.addWidget(note)
+
+        log_dir = PathManager.get_logs_dir()
+        log_path = log_dir / "launcher.log"
+        crash_path = PathManager.get_app_data_dir() / "crash.log"
+
+        summary = QLabel(
+            f"Version: {__version__}\n"
+            f"System: {platform.system()} {platform.release()}\n"
+            f"Data folder: {PathManager.get_data_root()}"
+        )
+        summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(summary)
+
+        log_row = QHBoxLayout()
+        log_label = QLabel(str(log_path))
+        log_label.setWordWrap(True)
+        log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        log_row.addWidget(log_label, 1)
+        btn_open_log = QPushButton("Open log folder")
+        btn_open_log.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir))))
+        log_row.addWidget(btn_open_log)
+        layout.addLayout(log_row)
+
+        buttons = QHBoxLayout()
+        btn_crash = QPushButton("Open crash log")
+        btn_crash.setEnabled(crash_path.exists())
+        btn_crash.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(crash_path))))
+        buttons.addWidget(btn_crash)
+        btn_copy = QPushButton("Copy diagnostics")
+        btn_copy.clicked.connect(self._copy_diagnostics)
+        buttons.addWidget(btn_copy)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        layout.addStretch(1)
+
+        self.pages_container.addWidget(page)
+
+    def _copy_diagnostics(self):
+        import platform
+
+        from core.logging_setup import redact_text
+        from core.paths import PathManager
+        from core.version import __version__
+
+        lines = [
+            f"Ae Thicc Launcher {__version__}",
+            f"OS: {platform.platform()}",
+            f"Data root: {PathManager.get_data_root()}",
+        ]
+        log_path = PathManager.get_logs_dir() / "launcher.log"
+        try:
+            with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+                tail = fh.readlines()[-150:]
+            lines.append("")
+            lines.append(f"--- launcher.log (last {len(tail)} lines) ---")
+            lines.extend(line.rstrip() for line in tail)
+        except OSError as exc:
+            lines.append(f"(log unavailable: {exc})")
+        QApplication.clipboard().setText(redact_text("\n".join(lines)))
+        QMessageBox.information(self, "Diagnostics",
+                                "Diagnostics copied to the clipboard.")
 
     def browse_sync_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Mirror Folder",
@@ -572,12 +663,12 @@ class SettingsDialog(QDialog):
         if self._default_library not in watched:
             self._default_library = watched[0] if watched else ""
         self.config["default_library"] = self._default_library
-        self.config["onboarding"] = {"completed": True, "version": 1}
         self.config.setdefault('savegames', {})
         self.config['savegames']['sync_folder'] = self.txt_sync_folder.text().strip()
         self.config['savegames']['sync_interval'] = self.spin_sync_interval.value()
         self.config['savegames']['sync_unit'] = self.combo_sync_unit.currentText()
         self.config['savegames']['keep_snapshots'] = self.spin_keep_snapshots.value()
+        self.config['savegames']['snapshot_hash'] = self.chk_snapshot_hash.isChecked()
         self.config['savegames']['include_launcher_state'] = self.chk_state_backup.isChecked()
         self.config.setdefault('playtime', {})
         self.config['playtime']['display'] = self.combo_playtime_display.currentData()

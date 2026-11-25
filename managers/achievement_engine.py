@@ -17,11 +17,12 @@ import json
 import re
 import sys
 import time
-import unicodedata
 from collections import defaultdict
 from datetime import datetime
 
+from core import titles
 from core.data_files import user_root, load_json
+from core.sessions import normalize_sessions
 
 DEFINITIONS_FILE = "launcher_achievements.json"
 PACKS_DIR = "achievement_packs"
@@ -58,20 +59,8 @@ DEFAULT_TITLES = {
     "phasmophobia": ["Phasmophobia"],
 }
 
-_EDITION_RE = re.compile(
-    r"(?i)(game of the year|complete edition|ultimate edition|"
-    r"director's cut|deluxe edition|sunset edition|digital edition|"
-    r"gold edition|standard edition|definitive edition|enhanced edition|"
-    r"remastered|remake|legacy edition|edition)"
-)
-
-
 def normalize_title(text) -> str:
-    text = unicodedata.normalize("NFKD", str(text or ""))
-    text = "".join(char for char in text if not unicodedata.combining(char))
-    text = text.replace("&", "and").lower()
-    text = _EDITION_RE.sub("", text)
-    return re.sub(r"[^a-z0-9]", "", text)
+    return titles.normalize_title(text)
 
 
 def load_title_lists(data=None):
@@ -144,27 +133,7 @@ def _resolve(value):
 
 
 def _session_records(records):
-    sessions = []
-    for record in records or []:
-        if not isinstance(record, dict):
-            continue
-        title = str(record.get("title") or "").strip()
-        if not title:
-            continue
-        seconds = _int(record.get("seconds"))
-        end = _int(record.get("end") or record.get("at"))
-        start = _int(record.get("start"))
-        if seconds <= 0 and end > start:
-            seconds = end - start
-        if seconds <= 0 or end <= 0:
-            continue
-        sessions.append({
-            "title": title,
-            "seconds": seconds,
-            "start": start or max(0, end - seconds),
-            "end": end,
-        })
-    return sessions
+    return normalize_sessions(records)
 
 
 def _int(value, default=0):
@@ -519,6 +488,39 @@ def trigger_has_event(trigger):
     if "any" in trigger:
         return any(trigger_has_event(item) for item in trigger.get("any") or [])
     return False
+
+
+def trigger_stat_keys(trigger):
+    """Top-level stat names the trigger reads, recursing over ``all``/``any``.
+
+    Sub-keys (``title``, ``franchise``, ``list``) are not separate names: the
+    caller compares the whole value of ``hours_by_title`` and friends, so a
+    change to any entry marks the key as changed.
+    """
+    keys = set()
+    if not isinstance(trigger, dict):
+        return keys
+    name = trigger.get("stat")
+    if name:
+        keys.add(str(name))
+    for group in ("all", "any"):
+        for item in trigger.get(group) or []:
+            keys.update(trigger_stat_keys(item))
+    return keys
+
+
+def trigger_event_names(trigger):
+    """Event names the trigger matches, recursing over ``all``/``any``."""
+    names = set()
+    if not isinstance(trigger, dict):
+        return names
+    name = trigger.get("event")
+    if name:
+        names.add(str(name))
+    for group in ("all", "any"):
+        for item in trigger.get(group) or []:
+            names.update(trigger_event_names(item))
+    return names
 
 
 def progress_for(definition, stats):

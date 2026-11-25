@@ -18,13 +18,18 @@ packs are added, existing files are not clobbered without the check above.
 """
 from __future__ import annotations
 
+import logging
+
 import hashlib
 import json
 import shutil
 from pathlib import Path
 
+from core.atomic_io import atomic_write_json
 from core.config import get_base_dir
 from core.paths import PathManager
+
+log = logging.getLogger(__name__)
 
 SEED_STATE_FILENAME = "data_seed.json"
 POSTS_INDEX_FILENAME = "steamrip_posts_index.json"
@@ -108,12 +113,9 @@ def _load_state() -> dict[str, str]:
 def _save_state(state: dict[str, str]) -> None:
     path = _state_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        atomic_write_json(path, state, indent=2)
     except OSError as exc:
-        print(f"[DataFiles] seed state save failed: {exc}")
+        log.exception(f"[DataFiles] seed state save failed: {exc}")
 
 
 def _iter_seed_files(source: Path):
@@ -188,7 +190,7 @@ def seed_user_copy(relative: str) -> Path | None:
         shutil.copy2(source, destination)
         return destination
     except OSError as exc:
-        print(f"[DataFiles] seed failed for {relative}: {exc}")
+        log.exception(f"[DataFiles] seed failed for {relative}: {exc}")
         return None
 
 

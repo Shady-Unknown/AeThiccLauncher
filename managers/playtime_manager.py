@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 import math
@@ -8,9 +9,11 @@ import vdf
 from datetime import datetime
 from pathlib import Path
 
-from core import steam_integration
+from core import steam_ids, steam_integration
 from core.meta_utils import save_steamrip_meta
 from core.paths import PathManager
+
+log = logging.getLogger(__name__)
 
 
 _VDF_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|[^\s]+')
@@ -126,26 +129,39 @@ class PlaytimeManager:
     Steam sovrascriverebbe il file).
     """
 
-    def __init__(self, app_window):
-        self.app_window = app_window
-        self.installed_games = app_window.installed_games
-        self.app_config = app_window.app_config
+    def __init__(self, installed_games, config, on_stub_updated=None,
+                 on_stubs_refresh=None):
+        """``installed_games``/``config`` may be values or providers.
+
+        Providers are read on every access, so a library reload that replaces
+        the mapping or ``update_entire_config`` replacing the config are picked
+        up without stale references.
+        """
+        self._installed_games = installed_games
+        self._config = config
+        self._on_stub_updated = on_stub_updated
+        self._on_stubs_refresh = on_stubs_refresh
+
+    @property
+    def installed_games(self):
+        value = self._installed_games
+        return value() if callable(value) else (value or {})
+
+    @property
+    def app_config(self):
+        value = self._config
+        return value() if callable(value) else (value or {})
 
     def _cfg(self):
         """Config corrente (può essere sostituita da update_entire_config)."""
-        return self.app_window.app_config
+        return self.app_config
 
     # ------------------------------------------------------------------ helpers
 
     @staticmethod
     def signed_appid_from_grid_id(grid_id):
-        """Converte l'appid unsigned (steam_grid_id) nell'appid signed a 32 bit
-        usato come chiave in localconfig.vdf."""
-        try:
-            uint = int(grid_id)
-        except (TypeError, ValueError):
-            return None
-        return uint - 0x100000000 if uint >= 0x80000000 else uint
+        """Unsigned grid id -> the signed appid used in ``localconfig.vdf``."""
+        return steam_ids.signed_appid(grid_id)
 
     @staticmethod
     def format_playtime(seconds, mode="hours"):
@@ -165,9 +181,12 @@ class PlaytimeManager:
         if not meta or 'install_dir' not in meta:
             return
         try:
-            save_steamrip_meta(meta['install_dir'], meta)
+            saved = save_steamrip_meta(meta['install_dir'], meta)
         except Exception as e:
-            print(f"[Playtime] Errore salvataggio meta per '{title}': {e}")
+            log.exception(f"[Playtime] Errore salvataggio meta per '{title}': {e}")
+            return
+        if not saved:
+            log.warning("[Playtime] steamrip_meta.json was not written for '%s'", title)
 
     # ------------------------------------------------------------------ reading
 
@@ -188,7 +207,7 @@ class PlaytimeManager:
             try:
                 data = _load_vdf(lc_path)
             except Exception as e:
-                print(f"[Playtime] Lettura fallita {lc_path}: {e}")
+                log.exception(f"[Playtime] Lettura fallita {lc_path}: {e}")
                 continue
 
             for key, entry in extract_app_stats(data).items():
@@ -299,10 +318,10 @@ class PlaytimeManager:
         try:
             self.refresh_steam_stats_cache()
         except Exception as e:
-            print(f"[Playtime] Errore cache Steam: {e}")
+            log.exception(f"[Playtime] Errore cache Steam: {e}")
 
         if not self._cfg().get('playtime', {}).get('auto_sync', True):
-            print("[Playtime] Auto-sync disabilitato nelle impostazioni.")
+            log.info("[Playtime] Auto-sync disabilitato nelle impostazioni.")
             return
 
         steam_cache = {}
@@ -324,14 +343,14 @@ class PlaytimeManager:
                     continue
                 self.sync_game(title, meta, steam_minutes=_steam_for(meta, signed))
             except Exception as e:
-                print(f"[Playtime] Errore sync per '{title}': {e}")
+                log.exception(f"[Playtime] Errore sync per '{title}': {e}")
 
         # Stub dei savegames con solo playtime (giochi senza save sincronizzate)
-        try:
-            if hasattr(self.app_window, 'savegames_manager'):
-                self.app_window.savegames_manager.ensure_playtime_stubs()
-        except Exception as e:
-            print(f"[Playtime] Errore aggiornamento stub savegames: {e}")
+        if self._on_stubs_refresh is not None:
+            try:
+                self._on_stubs_refresh()
+            except Exception as e:
+                log.exception(f"[Playtime] Errore aggiornamento stub savegames: {e}")
 
     # ------------------------------------------------------------------ sessions
 
@@ -347,15 +366,16 @@ class PlaytimeManager:
         if not session_seconds:
             return
         meta['playtime_seconds'] = int(meta.get('playtime_seconds', 0) or 0) + session_seconds
-        # Nuovo tempo da spingere su Steam (verrà valutato da sync_game: se Steam
-        # ha già contato la sessione da solo, il flag verrà rimosso).
-        meta['playtime_sync_pending'] = True
+        # Queue a Steam write only when there is an appid to write: a pending
+        # flag without a valid steam_grid_id could never be flushed.
+        if self.signed_appid_from_grid_id(meta.get('steam_grid_id')) is not None:
+            meta['playtime_sync_pending'] = True
         self._save_meta(title, meta)
-        try:
-            if hasattr(self.app_window, 'savegames_manager'):
-                self.app_window.savegames_manager.ensure_playtime_stub(title, meta)
-        except Exception as e:
-            print(f"[Playtime] Errore stub per '{title}': {e}")
+        if self._on_stub_updated is not None:
+            try:
+                self._on_stub_updated(title, meta)
+            except Exception as e:
+                log.exception(f"[Playtime] Errore stub per '{title}': {e}")
 
     # ------------------------------------------------------------------ restore
 
@@ -389,11 +409,37 @@ class PlaytimeManager:
 
     # ------------------------------------------------------------------ writing
 
-    def _resolve_write_targets(self, meta):
-        account_id = meta.get('steam_account_id') or ''
+    def _local_account_ids(self):
+        """Local Steam account ids (userdata folder names), deduplicated."""
+        ids = []
+        for path in steam_integration.get_steam_account_paths():
+            account_id = os.path.basename(os.path.normpath(path))
+            if account_id and account_id not in ids:
+                ids.append(account_id)
+        return ids
+
+    def _resolve_write_targets(self, meta, title=""):
+        """Accounts that actually own the game; never broadcast to every account.
+
+        Resolution order: the account whose ``shortcuts.vdf`` contains the
+        shortcut, then the stored ``steam_account_id`` if that account still
+        exists locally, then the only local account. When none matches the game
+        stays pending instead of polluting another account's ``localconfig.vdf``.
+        """
+        owners = steam_integration.shortcut_owner_accounts(
+            title or meta.get('title') or '',
+            meta.get('steam_shortcut_id') or '',
+            meta.get('steam_grid_id') or '',
+        )
+        if owners:
+            return owners
+        account_id = str(meta.get('steam_account_id') or '').strip()
+        local_ids = self._local_account_ids()
         if account_id:
-            return [account_id]
-        return [str(acc['id']) for acc in steam_integration.get_steam_accounts()]
+            return [account_id] if account_id in local_ids else []
+        if len(local_ids) == 1:
+            return [local_ids[0]]
+        return []
 
     @staticmethod
     def _find_app_block(text, appid_str):
@@ -451,15 +497,21 @@ class PlaytimeManager:
 
     @staticmethod
     def _patch_playtime_text(text, appid_minutes):
-        """Patch chirurgica: aggiorna/crea i soli blocchi '"<appid>" {...}'.
-        Il resto del file resta identico byte per byte."""
+        """Patch only the ``"<appid>" {...}`` blocks that can be updated.
+
+        Returns ``(text, patched_appids)`` so the caller clears the pending
+        flag only for the games Steam actually received.
+        """
+        patched = set()
         for appid_str, minutes in appid_minutes.items():
             text, ok = PlaytimeManager._patch_app_block(text, str(appid_str), minutes)
             if not ok:
                 text, ok = PlaytimeManager._insert_app_block(text, str(appid_str), minutes)
-            if not ok:
-                print(f"[Playtime] Impossibile trovare/creare il blocco appid {appid_str} in localconfig.vdf")
-        return text
+            if ok:
+                patched.add(str(appid_str))
+            else:
+                log.warning(f"[Playtime] Impossibile trovare/creare il blocco appid {appid_str} in localconfig.vdf")
+        return text, patched
 
     def write_playtime_to_steam(self):
         """Scrive su localconfig.vdf i playtime accodati (Steam deve essere chiuso).
@@ -469,7 +521,7 @@ class PlaytimeManager:
         configurazione di Steam.
         """
         if steam_integration.is_steam_running():
-            print("[Playtime] Steam in esecuzione: scrittura rimandata.")
+            log.info("[Playtime] Steam in esecuzione: scrittura rimandata.")
             return False
 
         grouped = {}
@@ -487,7 +539,11 @@ class PlaytimeManager:
             minutes = max(1, math.ceil(launcher_seconds / 60)) if launcher_seconds > 0 else 0
             if minutes <= 0:
                 continue
-            for account_id in self._resolve_write_targets(meta):
+            targets = self._resolve_write_targets(meta, title)
+            if not targets:
+                log.info(f"[Playtime] Nessun account Steam proprietario per '{title}': pending mantenuto.")
+                continue
+            for account_id in targets:
                 lc_path = steam_integration.get_steam_localconfig_path(account_id)
                 if not lc_path:
                     continue
@@ -497,42 +553,60 @@ class PlaytimeManager:
         if not grouped:
             return False
 
-        written_any = False
+        resolved_signed = set()
         for lc_path, appids in grouped.items():
             try:
                 text = ""
                 if os.path.exists(lc_path):
                     with open(lc_path, 'r', encoding='utf-8') as f:
                         text = f.read()
-                new_text = self._patch_playtime_text(text, appids)
+                new_text, patched = self._patch_playtime_text(text, appids)
                 if new_text == text:
-                    print(f"[Playtime] Nessuna modifica per {lc_path}")
+                    # Values already correct: nothing to write, but the game is
+                    # in sync and its pending flag can be cleared.
+                    resolved_signed.update(int(appid) for appid in patched)
+                    log.info(f"[Playtime] Nessuna modifica per {lc_path}")
                     continue
                 if os.path.exists(lc_path):
                     shutil.copy(lc_path, lc_path + ".bak")
                 with open(lc_path, 'w', encoding='utf-8') as f:
                     f.write(new_text)
-                written_any = True
-                print(f"[Playtime] Scritto su {lc_path}: {appids}")
+                resolved_signed.update(int(appid) for appid in patched)
+                log.info(f"[Playtime] Scritto su {lc_path}: {patched}")
             except Exception as e:
-                print(f"[Playtime] Errore scrittura {lc_path}: {e}")
+                log.exception(f"[Playtime] Errore scrittura {lc_path}: {e}")
 
-        if written_any:
+        if resolved_signed:
             for title, meta in self.installed_games.items():
-                if meta.get('playtime_sync_pending'):
+                if not meta.get('playtime_sync_pending'):
+                    continue
+                signed = self.signed_appid_from_grid_id(meta.get('steam_grid_id'))
+                if signed in resolved_signed:
                     meta['playtime_sync_pending'] = False
                     self._save_meta(title, meta)
-        return written_any
+            return True
+        return False
 
     def has_pending(self):
-        return any(meta.get('playtime_sync_pending') for meta in self.installed_games.values())
+        return any(
+            meta.get('playtime_sync_pending') and self._is_syncable(meta)
+            for meta in self.installed_games.values()
+        )
 
     def pending_games(self):
         return [
             (title, int(meta.get('playtime_seconds', 0) or 0))
             for title, meta in self.installed_games.items()
-            if meta.get('playtime_sync_pending')
+            if meta.get('playtime_sync_pending') and self._is_syncable(meta)
         ]
+
+    @staticmethod
+    def _is_syncable(meta):
+        """A pending game can be written only when it has a signed appid."""
+        if not meta or meta.get('is_orphan'):
+            return False
+        return PlaytimeManager.signed_appid_from_grid_id(
+            meta.get('steam_grid_id')) is not None
 
     def try_flush_pending(self):
         """Scrive gli aggiornamenti accodati solo se Steam è chiuso.
@@ -543,6 +617,6 @@ class PlaytimeManager:
         if not self.has_pending():
             return False
         if steam_integration.is_steam_running():
-            print("[Playtime] Steam attivo: write rimandata a chiusura/riavvio di Steam.")
+            log.info("[Playtime] Steam attivo: write rimandata a chiusura/riavvio di Steam.")
             return False
         return self.write_playtime_to_steam()

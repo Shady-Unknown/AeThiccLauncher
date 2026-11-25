@@ -6,6 +6,8 @@ including developers/publishers so Stats has data for the whole library.
 """
 from __future__ import annotations
 
+import logging
+
 import time
 
 import requests
@@ -13,6 +15,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from network.igdb_details_worker import DETAIL_FIELDS, STEAM_EXTERNAL_CATEGORY, parse_details
 from network.igdb_worker import IGDB_BASE, IGDBWorker
+
+log = logging.getLogger(__name__)
 
 BATCH_SIZE = 50
 REQUEST_DELAY = 0.35
@@ -48,14 +52,14 @@ class IGDBBatchWorker(QThread):
                     f"{IGDB_BASE}/games", headers=headers, data=body, timeout=20
                 )
             except Exception as exc:
-                print(f"[IGDBBatch] request error: {exc}")
+                log.exception(f"[IGDBBatch] request error: {exc}")
                 return None
             if response.status_code == 200:
                 return [g for g in (response.json() or []) if isinstance(g, dict)]
             if response.status_code == 429 and attempt < MAX_RETRIES:
                 time.sleep(2.0)
                 continue
-            print(f"[IGDBBatch] query status {response.status_code}: {response.text[:200]}")
+            log.info(f"[IGDBBatch] query status {response.status_code}: {response.text[:200]}")
             return None
         return None
 

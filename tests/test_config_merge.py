@@ -64,5 +64,56 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertTrue(loaded["onboarding"]["completed"])
 
 
+class ConfigSaveTests(unittest.TestCase):
+    def test_saves_even_without_watched_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp) / "config"
+            payload = {
+                "watched_folders": [],
+                "onboarding": {"completed": True, "version": 1},
+                "stats": {"region": "IT"},
+            }
+            with mock.patch.object(
+                PathManager, "get_config_dir", return_value=config_dir
+            ):
+                config_mod.save_config(payload)
+
+            saved = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["watched_folders"], [])
+            self.assertEqual(saved["stats"]["region"], "IT")
+
+    def test_preferences_survive_without_libraries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp) / "config"
+            with mock.patch.object(
+                PathManager, "get_config_dir", return_value=config_dir
+            ), mock.patch.object(
+                PathManager, "get_legacy_root", return_value=Path(tmp) / "legacy"
+            ):
+                cfg = config_mod.load_config()
+                cfg["watched_folders"] = []
+                cfg["stats"]["region"] = "IT"
+                cfg["onboarding"] = {"completed": True, "version": 1}
+                config_mod.save_config(cfg)
+                loaded = config_mod.load_config()
+
+            self.assertEqual(loaded["watched_folders"], [])
+            self.assertEqual(loaded["stats"]["region"], "IT")
+            self.assertTrue(loaded["onboarding"]["completed"])
+
+    def test_missing_onboarding_marker_stays_false(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp) / "config"
+            with mock.patch.object(
+                PathManager, "get_config_dir", return_value=config_dir
+            ), mock.patch.object(
+                PathManager, "get_legacy_root", return_value=Path(tmp) / "legacy"
+            ):
+                config_mod.save_config({"watched_folders": []})
+                loaded = config_mod.load_config()
+
+            self.assertFalse(loaded["onboarding"]["completed"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -439,6 +439,7 @@ class OnboardingWizard(QWizard):
         try:
             self.setStyleSheet(style_settings.get_stylesheet(theme))
         except Exception:
+            # best-effort: theme application is cosmetic
             pass
 
         self._libraries = [p for p in (config.get("watched_folders") or []) if p]

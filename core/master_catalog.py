@@ -1,13 +1,44 @@
+import logging
 import json
 import os
 import time
 from PyQt6.QtCore import QObject, QTimer
 
+from core.atomic_io import atomic_write_json
 from core.meta_utils import extract_steam_id_from_store_url
+
+log = logging.getLogger(__name__)
 
 CATALOG_TTL = 12 * 60 * 60
 PRICES_TTL = 24 * 60 * 60
 DEBOUNCE_MS = 3000
+
+#: Fields that change how Discovery matches posts/games to catalog titles.
+#: Enrichment (igdb_meta, prices, version_status, SGDB artwork) deliberately
+#: does not bump ``match_revision``, so the Discovery index is not rebuilt for
+#: every enrichment write.
+_MATCH_FIELDS = frozenset({"steam_id", "raw_title"})
+
+
+def _match_value(entry):
+    """Projection of an entry that affects the Discovery match index."""
+    if not isinstance(entry, dict):
+        return (str(entry or "").rstrip("/"), "", "", "")
+    sgdb = entry.get("sgdb_assets")
+    app_id = ""
+    if isinstance(sgdb, dict):
+        app_id = str(sgdb.get("steam_app_id") or "").strip()
+    return (
+        str(entry.get("url") or "").rstrip("/"),
+        str(entry.get("raw_title") or ""),
+        str(entry.get("steam_id") or "").strip(),
+        app_id,
+    )
+
+
+def _match_signature(data):
+    return {title: _match_value(entry) for title, entry in data.items()}
+
 
 ENRICHMENT_FIELDS = {
     "steam_id",
@@ -24,12 +55,17 @@ ENRICHMENT_FIELDS = {
 CLEAR = object()
 
 
+class CatalogCorruptionError(RuntimeError):
+    """The catalog and its backup are both unreadable: refuse to start."""
+
+
 class MasterCatalog(QObject):
     def __init__(self, db_path, parent=None):
         super().__init__(parent)
         self._db_path = db_path
         self._data = {}
         self._dirty = False
+        self._match_revision = 0
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -40,38 +76,74 @@ class MasterCatalog(QObject):
 
     # --- Loading / Saving ---
 
-    def load(self):
-        if os.path.exists(self._db_path):
-            try:
-                with open(self._db_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    normalized = {}
-                    for k, v in loaded.items():
-                        if isinstance(v, str):
-                            normalized[k] = {"url": v}
-                        elif isinstance(v, dict):
-                            normalized[k] = v
-                        else:
-                            normalized[k] = {"url": str(v)}
-                    self._data = normalized
-                print(f"[MasterCatalog] Loaded {len(self._data)} games")
-            except Exception as e:
-                print(f"[MasterCatalog] Load error: {e}")
-                self._data = {}
+    @staticmethod
+    def _read_catalog_file(path):
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("catalog root is not a JSON object")
+        return data
 
-    def _flush(self):
+    def load(self):
+        try:
+            loaded = self._read_catalog_file(self._db_path)
+            recovered = False
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            backup = self._db_path + ".bak"
+            if not os.path.exists(backup):
+                raise CatalogCorruptionError(
+                    "The game catalog is corrupted and no backup exists.\n\n"
+                    f"File: {self._db_path}\n\n"
+                    f"{exc}\n\n"
+                    "Restore the file from a backup or remove it to rebuild the "
+                    "library before starting the launcher."
+                ) from exc
+            try:
+                loaded = self._read_catalog_file(backup)
+            except Exception as backup_exc:
+                raise CatalogCorruptionError(
+                    "The game catalog and its backup are both corrupted.\n\n"
+                    f"File: {self._db_path}\n"
+                    f"Backup: {backup}\n\n"
+                    f"{backup_exc}\n\n"
+                    "Restore one of these files or remove them to rebuild the "
+                    "library before starting the launcher."
+                ) from backup_exc
+            recovered = True
+
+        normalized = {}
+        for k, v in loaded.items():
+            if isinstance(v, str):
+                normalized[k] = {"url": v}
+            elif isinstance(v, dict):
+                normalized[k] = v
+            else:
+                normalized[k] = {"url": str(v)}
+        before = _match_signature(self._data)
+        self._data = normalized
+        if _match_signature(self._data) != before:
+            self._match_revision += 1
+        log.info(f"[MasterCatalog] Loaded {len(self._data)} games")
+        if recovered:
+            log.info(f"[MasterCatalog] Recovered from {self._db_path}.bak")
+            # Rewrite the primary file without rotating the backup: it still
+            # holds the good copy until the next regular save.
+            self._flush(backup=False)
+
+    def _flush(self, backup=True):
         t0 = time.perf_counter()
         try:
-            os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
-            with open(self._db_path, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, separators=(",", ":"), ensure_ascii=False)
+            atomic_write_json(self._db_path, self._data,
+                              separators=(",", ":"), ensure_ascii=False,
+                              fsync=True, backup=backup)
             self._dirty = False
         except Exception as e:
-            print(f"[MasterCatalog] Save error: {e}")
+            log.exception(f"[MasterCatalog] Save error: {e}")
         dt = (time.perf_counter() - t0) * 1000.0
         if os.environ.get("SRP_DEBUG_PERF") == "1" and dt > 40:
-            print(f"[PERF] master_catalog_flush: {dt:.0f}ms")
+            log.debug(f"[PERF] master_catalog_flush: {dt:.0f}ms")
 
     def _debounce_save(self):
         self._dirty = True
@@ -167,16 +239,25 @@ class MasterCatalog(QObject):
             if title not in merged:
                 merged[title] = dict(old_entry)
 
+        before = _match_signature(self._data)
         self._data = merged
+        if _match_signature(self._data) != before:
+            self._match_revision += 1
         self._debounce_save()
         return len(self._data)
 
     # --- Enrichment helpers (RAM instant, disk debounced) ---
 
     def set_game_field(self, title, field, value):
-        if title not in self._data:
+        created = title not in self._data
+        if created:
             self._data[title] = {"url": ""}
-        self._data[title][field] = value
+        entry = self._data[title]
+        relevant = field in _MATCH_FIELDS or field in ("url", "sgdb_assets")
+        before = _match_value(entry) if relevant else None
+        entry[field] = value
+        if created or (relevant and _match_value(entry) != before):
+            self._match_revision += 1
         self._debounce_save()
 
     def get_game_field(self, title, field, default=None):
@@ -187,10 +268,20 @@ class MasterCatalog(QObject):
 
     def set_url(self, title, url):
         if title in self._data and isinstance(self._data[title], dict):
-            self._data[title]["url"] = url
+            entry = self._data[title]
+            before = _match_value(entry)
+            entry["url"] = url
+            if _match_value(entry) != before:
+                self._match_revision += 1
         else:
             self._data[title] = {"url": url}
+            self._match_revision += 1
         self._debounce_save()
+
+    @property
+    def match_revision(self):
+        """Incremental revision of the fields used by Discovery matching."""
+        return self._match_revision
 
     def set_steam_app_id(self, title, steam_app_id):
         self.set_game_field(title, "steam_app_id", steam_app_id)

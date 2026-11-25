@@ -1,3 +1,4 @@
+import logging
 import json
 import os
 import time
@@ -6,7 +7,10 @@ import requests
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 
 from core import secrets
+from core.atomic_io import atomic_write_json
 from core.paths import PathManager
+
+log = logging.getLogger(__name__)
 
 TOKEN_CACHE_FILENAME = "igdb_token.json"
 
@@ -171,10 +175,12 @@ class IGDBWorker(QThread):
         self._token = token
         self._token_expires = time.time() + max(0, int(expires_in) - 300)
         try:
-            with open(self._token_cache_path(), "w", encoding="utf-8") as f:
-                json.dump({"access_token": token, "expires_at": self._token_expires}, f)
+            atomic_write_json(self._token_cache_path(), {
+                "access_token": token,
+                "expires_at": self._token_expires,
+            }, fsync=False)
         except Exception as e:
-            print(f"[IGDB] token cache save error: {e}")
+            log.exception(f"[IGDB] token cache save error: {e}")
 
     def _refresh_token(self):
         try:
@@ -188,13 +194,13 @@ class IGDBWorker(QThread):
                 timeout=10,
             )
             if r.status_code != 200:
-                print(f"[IGDB] token status: {r.status_code} {r.text[:200]}")
+                log.info(f"[IGDB] token status: {r.status_code} {r.text[:200]}")
                 return False
             data = r.json()
             self._save_token(data.get("access_token"), int(data.get("expires_in") or 0))
             return True
         except Exception as e:
-            print(f"[IGDB] token refresh error: {e}")
+            log.exception(f"[IGDB] token refresh error: {e}")
             return False
 
     def _ensure_token(self):
@@ -233,12 +239,12 @@ class IGDBWorker(QThread):
                     timeout=15,
                 )
             if r.status_code != 200:
-                print(f"[IGDB] query status {r.status_code} for '{category['key']}': {r.text[:200]}")
+                log.info(f"[IGDB] query status {r.status_code} for '{category['key']}': {r.text[:200]}")
                 return []
             games = [normalize_game(g) for g in (r.json() or []) if g.get("name")]
             return games
         except Exception as e:
-            print(f"[IGDB] query error for '{category['key']}': {e}")
+            log.exception(f"[IGDB] query error for '{category['key']}': {e}")
             return []
 
     # ── lifecycle ────────────────────────────────────────────────────
@@ -249,11 +255,11 @@ class IGDBWorker(QThread):
 
     def run(self):
         if not self._load_creds():
-            print("[IGDB] credentials not configured")
+            log.info("[IGDB] credentials not configured")
             self.error_occurred.emit("IGDB credentials not configured.")
             return
         if not self._ensure_token():
-            print("[IGDB] could not obtain access token")
+            log.info("[IGDB] could not obtain access token")
             self.error_occurred.emit("IGDB authentication failed.")
             return
 
@@ -268,7 +274,7 @@ class IGDBWorker(QThread):
             self._offsets[category["key"]] = len(games)
             time.sleep(REQUEST_DELAY_SECONDS)
 
-        print(f"[IGDB] fetched {len(result)} categories")
+        log.info(f"[IGDB] fetched {len(result)} categories")
         self.categories_ready.emit(result)
         if self._stop_flag:
             return

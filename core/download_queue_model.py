@@ -11,6 +11,8 @@ import json
 import os
 from dataclasses import dataclass
 
+from core.atomic_io import atomic_write_json
+
 STATE_DOWNLOADING = "downloading"
 STATE_EXTRACTING = "extracting"
 STATE_PARTIAL = "partial"
@@ -83,8 +85,7 @@ def write_extraction_state(archive_path, payload):
     data = dict(payload or {})
     data.setdefault("archive_path", str(archive_path))
     try:
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False)
+        atomic_write_json(path, data)
     except OSError:
         pass
 

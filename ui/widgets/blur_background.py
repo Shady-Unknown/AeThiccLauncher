@@ -10,6 +10,8 @@ testo bianco flottante.
 """
 from __future__ import annotations
 
+import logging
+
 import os
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageStat
@@ -18,6 +20,8 @@ from PyQt6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import QWidget
 
 from core.config import get_base_dir
+
+log = logging.getLogger(__name__)
 
 MAX_BLUR_WIDTH = 1600
 DEBOUNCE_MS = 120
@@ -94,7 +98,7 @@ class _BlurJob(QRunnable):
             image = render_blurred(self.path, self.width, self.height,
                                    self.blur_percent)
         except Exception as exc:  # pragma: no cover - dipende dal filesystem
-            print(f"[Background] blur failed for {self.path}: {exc}")
+            log.exception(f"[Background] blur failed for {self.path}: {exc}")
             return
         self.signals.done.emit(self.job_id, image)
 
@@ -154,7 +158,7 @@ class BlurredBackground(QObject):
         if not candidate:
             splash = splash_path()
             if not os.path.isfile(splash):
-                print(f"[Background] splash screen missing: {splash}")
+                log.info(f"[Background] splash screen missing: {splash}")
                 self._source_path = ""
                 self._host.update()
                 return

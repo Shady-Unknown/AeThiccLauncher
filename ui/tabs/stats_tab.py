@@ -8,9 +8,11 @@ state and StatsManager; there is no demo dataset.
 """
 from __future__ import annotations
 
+import logging
+
 import time
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QGridLayout,
@@ -32,6 +34,8 @@ from core.events import (
 from core.mini_cover_cache import MiniCoverManager
 from core.price_utils import format_cents
 from managers.stats_phrases import StatsPhrases
+from core.task_registry import TaskRegistry
+from ui.stats_worker import StatsSnapshotWorker
 from managers.stats_sorting import (
     DEFAULT_SORT_KEY, SORT_OPTIONS, filter_games, format_yield,
     normalize_sort_key, sort_games,
@@ -42,6 +46,8 @@ from ui.widgets.charts import (
 )
 from ui.widgets.cover_thumb import CoverThumb
 from ui.widgets.stat_card import StatCard
+
+log = logging.getLogger(__name__)
 
 RANGES = (
     ("30d", "30d"),
@@ -117,6 +123,8 @@ METRIC_DEFINITIONS = (
 
 
 class StatsTab(QWidget):
+    snapshot_ready = pyqtSignal(object)
+
     def __init__(self, app_window, stats_manager, parent=None):
         super().__init__(parent)
         self.app_window = app_window
@@ -130,6 +138,9 @@ class StatsTab(QWidget):
         self._phrase_text = ""
         self._updating_region = False
         self._updating_library = False
+        self._request_id = 0
+        self._stats_worker = None
+        self._pending_stats_key = None
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
@@ -143,7 +154,7 @@ class StatsTab(QWidget):
         self._build_ui()
         self._bind_events()
         self.apply_theme()
-        self.refresh()
+        self._schedule_refresh()
 
     # ------------------------------------------------------------------ config
 
@@ -172,8 +183,11 @@ class StatsTab(QWidget):
     def _save_config(self):
         try:
             save_config(self._config())
+            events = getattr(self.mw, "events", None)
+            if events is not None:
+                events.emit_event(EVENT_PREFS_CHANGED, {"source": "stats"})
         except Exception as exc:
-            print(f"[Stats] config save failed: {exc}")
+            log.exception(f"[Stats] config save failed: {exc}")
 
     # ------------------------------------------------------------------ UI
 
@@ -215,6 +229,15 @@ class StatsTab(QWidget):
         controls.addWidget(self.region_combo)
         header.addLayout(controls)
         root.addLayout(header)
+
+        self.loading_label = QLabel("Loading statistics…")
+        self.loading_label.setObjectName("StatsLoading")
+        self.loading_label.setStyleSheet(
+            f"color: {QColor(255, 255, 255, 160).name(QColor.NameFormat.HexArgb)};"
+            " font-size: 12px; padding: 0 2px;"
+        )
+        self.loading_label.setVisible(False)
+        root.addWidget(self.loading_label)
 
         self.advice_banner = QFrame()
         self.advice_banner.setObjectName("AdviceBanner")
@@ -606,7 +629,7 @@ class StatsTab(QWidget):
                 if self.stats_manager is not None else []
             )
         except Exception as exc:
-            print(f"[Stats] heatmap failed: {exc}")
+            log.exception(f"[Stats] heatmap failed: {exc}")
             heat_days = []
         self.heatmap.set_data(heat_days, 52)
         self.heatmap_hint.setText(
@@ -731,20 +754,76 @@ class StatsTab(QWidget):
             return
         self._sync_controls()
         self._sync_library_controls()
-        range_key = self._range_key()
-        region = self._region()
+        key = (self._range_key(), self._region())
 
-        try:
-            snapshot = (
-                self.stats_manager.snapshot(range_key=range_key, region=region)
-                if self.stats_manager is not None else {}
-            )
-        except Exception as exc:
-            print(f"[Stats] snapshot failed: {exc}")
-            snapshot = {}
+        if self.stats_manager is None:
+            self._apply_snapshot({})
+            return
 
+        cached = self.stats_manager.cached_snapshot(range_key=key[0], region=key[1])
+        self._request_id += 1
+        if cached is not None:
+            self._pending_stats_key = None
+            self._show_loading(False)
+            self._snapshot = cached
+            self._apply_snapshot(cached)
+            return
+
+        if self._stats_worker is not None and self._stats_worker.isRunning():
+            worker_key = (self._stats_worker.range_key, self._stats_worker.region)
+            if worker_key == key:
+                return
+            # A newer range/region was selected: remember it and let the
+            # running worker finish, its result will be discarded.
+            self._pending_stats_key = key
+            return
+
+        self._start_stats_worker(key, self._request_id)
+
+    def _show_loading(self, visible):
+        if hasattr(self, "loading_label"):
+            self.loading_label.setVisible(bool(visible) and not self._snapshot)
+
+    def _start_stats_worker(self, key, request_id):
+        range_key, region = key
+        self._pending_stats_key = key
+        self._show_loading(True)
+        worker = StatsSnapshotWorker(
+            self.stats_manager, request_id, range_key, region, self)
+        worker.ready.connect(self._on_stats_ready)
+        worker.failed.connect(self._on_stats_failed)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
+        self._stats_worker = worker
+        worker.start()
+
+    def _on_stats_ready(self, request_id, range_key, region, snapshot):
+        self._stats_worker = None
+        if request_id != self._request_id:
+            self._maybe_start_pending()
+            return
+        self._pending_stats_key = None
+        self._show_loading(False)
         self._snapshot = snapshot
         self._apply_snapshot(snapshot)
+        self.snapshot_ready.emit(snapshot)
+
+    def _on_stats_failed(self, request_id, message):
+        self._stats_worker = None
+        self._show_loading(False)
+        log.warning(f"[Stats] snapshot failed: {message}")
+        self._maybe_start_pending()
+
+    def _maybe_start_pending(self):
+        pending = self._pending_stats_key
+        if pending is None:
+            return
+        if self._stats_worker is not None and self._stats_worker.isRunning():
+            return
+        self._pending_stats_key = None
+        self._request_id += 1
+        self._start_stats_worker(pending, self._request_id)
 
     def _sync_controls(self):
         key = self._range_key()
@@ -1018,7 +1097,7 @@ class StatsTab(QWidget):
         try:
             return self.stats_manager.game_timeline(title, self._range_key())
         except Exception as exc:
-            print(f"[Stats] selected timeline failed: {exc}")
+            log.exception(f"[Stats] selected timeline failed: {exc}")
             return {"days": [], "total_hours": 0}
 
     def _cover_for_game(self, game):

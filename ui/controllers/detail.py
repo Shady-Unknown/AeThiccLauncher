@@ -4,6 +4,7 @@ Extracted from the historical AppWindow god object. The class is a
 cohesive mixin: methods keep using ``self`` (the AppWindow instance),
 so behaviour stays identical while the file is compartmentalised.
 """
+import logging
 
 import sys
 import os
@@ -37,7 +38,8 @@ from PyQt6.QtNetwork import QNetworkCookie
 from ui.tabs.downloads_tab import DownloadManagerTab
 from network.scraper import SteamRIPScraper
 #from core.installer import GameInstaller
-from managers.save_manager import SavegamesManager, safe_game_folder_name
+from core.naming import safe_game_folder_name
+from managers.save_manager import SavegamesManager
 from managers.playtime_manager import PlaytimeManager
 from ui.tabs.savegames_tab import SavegamesTab
 from core import config as style_settings
@@ -56,12 +58,11 @@ _PAGE_TTL = 6 * 3600  # 6 ore: soglia dopo cui un link è considerato potenzialm
 from network.sales_worker import SalesWorker
 from ui.styles.sale_style import SaleStyle, SALE_GREEN, SALE_GLOW_CSS
 from ui.dialogs.settings_dialog import SettingsDialog
-from managers.library_manager import LibraryManager, is_local_install
+from ui.library_manager import LibraryManager, is_local_install
 from managers.igdb_details_cache import IgdbDetailsCache
 from network.igdb_details_worker import IGDBDetailsWorker
-from managers.background_scanner import BackgroundScanner
-from core.game_launcher import GameLauncher
-from core.installer_flow import InstallerFlowCoordinator
+from ui.controllers.game_launcher import GameLauncher
+from ui.controllers.installer_flow import InstallerFlowCoordinator
 from core import platform_info, steam_integration
 from core.events import (
     EVENT_BACKUP_CREATED,
@@ -87,12 +88,73 @@ from network.steam_build_worker import SteamBuildWorker
 from ui.dialogs.steam_restart_dialog import SteamRestartDialog
 from ui.styles.structural_theme import StructuralTheme
 from core.cover_cache import CoverCache
+from core.task_registry import TaskRegistry
+from ui.cover_worker import CoverResolveWorker
+
+log = logging.getLogger(__name__)
 
 # --- APP WINDOW PRINCIPALE ---
 
 class GameDetailController:
+    def _resolve_cover_async(self, title, urls):
+        """Return cached cover paths now and resolve the rest in background."""
+        urls = list(urls or [])
+        cached = CoverCache.resolve_urls_cached(
+            urls, title=title, installed_games=self.installed_games)
+        needs_download = any(
+            url and not str(url).startswith("file://") for url in urls)
+        if not needs_download:
+            return cached
+
+        self._cover_request_id = getattr(self, "_cover_request_id", 0) + 1
+        request_id = self._cover_request_id
+        worker = CoverResolveWorker(
+            request_id, title, urls, self.installed_games, self)
+        worker.ready.connect(self._on_cover_resolved)
+        worker.failed.connect(self._on_cover_failed)
+        registry = TaskRegistry.instance()
+        if registry is not None:
+            registry.track(worker)
+        previous = getattr(self, "_cover_worker", None)
+        if previous is not None and previous.isRunning():
+            previous.cancel()
+        self._cover_worker = worker
+        worker.start()
+        return cached
+
+    def _on_cover_resolved(self, request_id, title, resolved):
+        if request_id != getattr(self, "_cover_request_id", 0):
+            return
+        current_title = str((self.current_game_data or {}).get("title") or "")
+        if current_title and current_title != title:
+            return
+        self.current_game_data["cover_urls"] = resolved
+        page_url = str((self.current_game_data or {}).get("page_url") or "")
+        if page_url and page_url in self.session_cache:
+            self.session_cache[page_url]["cover_urls"] = resolved
+            self._save_offline_cache()
+        if resolved:
+            self._set_cover_image(resolved[0])
+
+    def _on_cover_failed(self, request_id, message):
+        if request_id != getattr(self, "_cover_request_id", 0):
+            return
+        log.warning(f"[Cover] background resolve failed: {message}")
+
+    def _set_cover_image(self, url):
+        if not url:
+            return
+        cover = getattr(self, "cover_image", None)
+        page = cover.page() if cover is not None else None
+        if page is None:
+            return
+        try:
+            page.runJavaScript(f"setCover({json.dumps(str(url))})")
+        except Exception as exc:
+            log.debug(f"[Cover] live update skipped: {exc}")
+
     def _on_sgdb_assets_ready(self, title, sgdb_assets):
-        print(f"[SGDB] _on_sgdb_assets_ready: title='{title}', steam_app_id='{sgdb_assets.get('steam_app_id', '')}', grid={'yes' if sgdb_assets.get('grid') else 'no'}")
+        log.debug(f"[SGDB] _on_sgdb_assets_ready: title='{title}', steam_app_id='{sgdb_assets.get('steam_app_id', '')}', grid={'yes' if sgdb_assets.get('grid') else 'no'}")
         self.master_catalog.set_sgdb_assets(
             title, sgdb_assets.get("steam_app_id", ""),
             grid_url=sgdb_assets.get("grid", ""),
@@ -116,7 +178,7 @@ class GameDetailController:
             sgdb_assets["grid"], igdb_cover, sgdb_assets["hero"],
             sgdb_assets["logo"], sgdb_assets["wide"], img_url,
         ] if v]
-        new_urls = CoverCache.resolve_urls(new_urls, title=title, installed_games=self.installed_games)
+        new_urls = self._resolve_cover_async(title, new_urls)
         self.current_game_data["cover_urls"] = new_urls
 
         # The wide artwork can arrive after the sheet is already on screen:
@@ -163,7 +225,7 @@ class GameDetailController:
                     plat_list.append(name)
                     disc = max(disc, sd.get("discount_percent", 0))
             sgdb_banner_text = SaleStyle.sale_cover_banner_text(" & ".join(plat_list), disc)
-        print(f"[SGDB] Cover re-render: _is_gold_tier={self._is_gold_tier}, is_on_sale={is_on_sale}, new_urls_count={len(new_urls)}")
+        log.debug(f"[SGDB] Cover re-render: _is_gold_tier={self._is_gold_tier}, is_on_sale={is_on_sale}, new_urls_count={len(new_urls)}")
 
         if self._is_gold_tier:
             html_cover = GoldTierStyle.gold_cover_html(
@@ -232,13 +294,14 @@ class GameDetailController:
             steam_url = (cached_prices.get("steam", {}).get("url", "")
                          if isinstance(cached_prices, dict) else "")
             should_refetch = f"/app/{steam_app_id}" not in steam_url
-            print(f"[SGDB] Refetch check: steam_app_id={steam_app_id}, steam_url='{steam_url}', should_refetch={should_refetch}, cached_prices_type={type(cached_prices).__name__}")
+            log.debug(f"[SGDB] Refetch check: steam_app_id={steam_app_id}, steam_url='{steam_url}', should_refetch={should_refetch}, cached_prices_type={type(cached_prices).__name__}")
             if should_refetch:
                 from network.sales_worker import SalesWorker
                 sales_worker = SalesWorker(title, steam_id=steam_app_id, region=self._price_region())
                 sales_worker.sale_data_ready.connect(self._on_sale_data_found)
                 sales_worker.finished.connect(lambda w=sales_worker: self._cleanup_sales_worker(w))
                 self._active_sales_workers.append(sales_worker)
+                self.tasks.track(sales_worker)
                 sales_worker.start()
 
     def _apply_age_badges(self, ratings):
@@ -287,7 +350,7 @@ class GameDetailController:
             parent=self,
         )
         worker.details_ready.connect(self._on_age_details_ready)
-        self._age_worker = worker
+        self._age_worker = self.tasks.track(worker)
         worker.start()
 
     def _on_age_details_ready(self, title, details):
@@ -364,7 +427,7 @@ class GameDetailController:
             self.scraper._popup_extract = None
             page_url = str(data.get("page_url") or "").rstrip("/")
             if str(popup_flag).rstrip("/") == page_url:
-                print("[App] extract richiesto dal popup: Explorer non aggiornato")
+                log.debug("[App] extract richiesto dal popup: Explorer non aggiornato")
                 return
 
         _perf_t0 = time.perf_counter()
@@ -380,7 +443,7 @@ class GameDetailController:
         title = data.get('title', 'Unknown')
         is_local = bool(data.get('local_only'))
 
-        print(f"[Display] title='{title}', steam_id='{data.get('steam_id', '')}', has_cover_urls={'cover_urls' in data and bool(data['cover_urls'])}")
+        log.debug(f"[Display] title='{title}', steam_id='{data.get('steam_id', '')}', has_cover_urls={'cover_urls' in data and bool(data['cover_urls'])}")
 
         # Merge enrichment from master_catalog (SGDB assets override cached data)
         mc_sgdb = self.master_catalog.get_sgdb_assets(title)
@@ -405,12 +468,11 @@ class GameDetailController:
         if preferred_cover_urls:
             data["cover_urls"] = preferred_cover_urls
 
-        # Resolve cover URLs to local file:// paths (installed → Steam_Assets, else → cache)
-        data["cover_urls"] = CoverCache.resolve_urls(
-            data.get("cover_urls", []),
-            title=title,
-            installed_games=self.installed_games,
-        )
+        # Resolve cover URLs to local file:// paths (installed → Steam_Assets,
+        # else → cache). Only local files are checked here; missing images are
+        # downloaded by a worker and applied to the live sheet when ready.
+        data["cover_urls"] = self._resolve_cover_async(
+            title, data.get("cover_urls", []))
         _perf("cover_resolve")
 
         # Trigger SGDB fetch solo se manca davvero e non l'abbiamo già verificato.
@@ -427,7 +489,7 @@ class GameDetailController:
             self._is_gold_tier = GoldTierManager.is_gold_by_steam_id(sid)
             if self._is_gold_tier:
                 self._gold_reason = GoldTierManager.get_reason_by_steam_id(sid)
-                print(f"[GoldTier] Matched via steam_app_id={sid}")
+                log.debug(f"[GoldTier] Matched via steam_app_id={sid}")
 
         # Tier 2: Steam App ID from installed_games metadata
         if not self._is_gold_tier and title in self.installed_games:
@@ -437,14 +499,14 @@ class GameDetailController:
                 self._is_gold_tier = GoldTierManager.is_gold_by_steam_id(sid2)
                 if self._is_gold_tier:
                     self._gold_reason = GoldTierManager.get_reason_by_steam_id(sid2)
-                    print(f"[GoldTier] Matched via installed meta steam_app_id={sid2}")
+                    log.debug(f"[GoldTier] Matched via installed meta steam_app_id={sid2}")
 
         # Tier 3: Title-based matching (handles old caches, non-Steam, fallback)
         if not self._is_gold_tier:
             self._is_gold_tier = GoldTierManager.is_gold_tier(title)
             if self._is_gold_tier:
                 self._gold_reason = GoldTierManager.get_gold_reason(title)
-                print(f"[GoldTier] Matched via title='{title}'")
+                log.debug(f"[GoldTier] Matched via title='{title}'")
 
         # Tier 4: Installed games alternate title as last resort
         if not self._is_gold_tier and title in self.installed_games:
@@ -453,7 +515,7 @@ class GameDetailController:
                 self._is_gold_tier = GoldTierManager.is_gold_tier(alt)
                 if self._is_gold_tier:
                     self._gold_reason = GoldTierManager.get_gold_reason(alt)
-                    print(f"[GoldTier] Matched via alt title='{alt}'")
+                    log.debug(f"[GoldTier] Matched via alt title='{alt}'")
 
         # --- VERIFICA INTEGRITÀ STEAM ---
         if title in self.installed_games:
@@ -506,7 +568,7 @@ class GameDetailController:
         if isinstance(mc_entry, dict):
             mc_ver = mc_entry.get('version', '')
             if mc_ver and mc_ver != 'Release Base' and mc_ver != web_version:
-                print(f"[App] Master catalog has newer version '{mc_ver}' vs cached '{web_version}' for '{title}'")
+                log.debug(f"[App] Master catalog has newer version '{mc_ver}' vs cached '{web_version}' for '{title}'")
                 web_version = mc_ver
         
         # --- 1. GESTIONE AUTO-POPULATE JSON ---
@@ -549,7 +611,7 @@ class GameDetailController:
                 and actual_url
                 and actual_url not in self._version_status_backfill):
             self._version_status_backfill.add(actual_url)
-            print(f"[VersionStatus] cached entry senza status per '{title}' — backfill in background")
+            log.debug(f"[VersionStatus] cached entry senza status per '{title}' — backfill in background")
             QTimer.singleShot(200, lambda t=title, u=actual_url: self._backfill_version_status_async(t, u))
 
         if meta_for_update:
@@ -623,9 +685,13 @@ class GameDetailController:
             
             # Disconnettiamo i vecchi slot per evitare esecuzioni multiple/doppie sui click
             try: self.btn_play_main.clicked.disconnect()
-            except Exception: pass
+            except Exception:
+                # best-effort: Qt signals may already be disconnected
+                pass
             try: self.btn_steam_optional.clicked.disconnect()
-            except Exception: pass
+            except Exception:
+                # best-effort: Qt signals may already be disconnected
+                pass
 
             # --- COMPORTAMENTO DIVISIONE OS ---
             if sys.platform == 'linux':
@@ -927,7 +993,8 @@ class GameDetailController:
         try:
             self.btn_steam_store.clicked.disconnect()
             self.btn_gog_store.clicked.disconnect()
-        except:
+        except (TypeError, RuntimeError):
+            # best-effort: buttons may not be connected yet
             pass
 
         # 1. Controlliamo se il Master Catalog ha già store URLs
@@ -945,6 +1012,7 @@ class GameDetailController:
             new_worker = StoreLinksWorker(title)
             new_worker.links_ready.connect(self._on_store_links_found)
             self._active_store_workers.append(new_worker) # Lo salviamo dalla Garbage Collection
+            self.tasks.track(new_worker)
             new_worker.start()
 
         # --- SALES WORKER (skip if prices are <24h fresh) ---
@@ -958,6 +1026,7 @@ class GameDetailController:
             sales_worker.sale_data_ready.connect(self._on_sale_data_found)
             sales_worker.finished.connect(lambda w=sales_worker: self._cleanup_sales_worker(w))
             self._active_sales_workers.append(sales_worker)
+            self.tasks.track(sales_worker)
             sales_worker.start()
 
         # Stash SGDB enrichment into Master Catalog — solo se abbiamo davvero
@@ -1045,7 +1114,7 @@ class GameDetailController:
             for label, ms in _perf_marks:
                 parts.append(f"{label}={ms - prev:.0f}ms")
                 prev = ms
-            print("[Perf] display_game_data " + " ".join(parts) + f" total={prev:.0f}ms")
+            log.debug("[Perf] display_game_data " + " ".join(parts) + f" total={prev:.0f}ms")
 
     def _on_store_links_found(self, steam_url, gog_url, game_title):
         """Asynchronously updates store shortcut buttons and persists to Master Catalog."""
@@ -1101,19 +1170,20 @@ class GameDetailController:
         if not self.needs_sgdb_fetch(title):
             return
         from network.sgdb_worker import SGDBWorker
-        print(f"[SGDB] Fetching assets for '{title}'")
+        log.debug(f"[SGDB] Fetching assets for '{title}'")
         self._sgdb_inflight_titles.add(title)
         worker = SGDBWorker(title)
         worker.sgdb_finished.connect(self._on_sgdb_assets_ready)
         worker.finished.connect(lambda w=worker: self._cleanup_sgdb_worker(w))
         self._active_sgdb_workers.append(worker)
+        self.tasks.track(worker)
         worker.start()
 
     def _price_region(self):
         return str((self.app_config.get("stats", {}) or {}).get("region") or "US").upper()
 
     def _on_sale_data_found(self, steam_data, gog_data, game_title):
-        print(f"[SaleData] called for '{game_title}', steam_on_sale={steam_data.get('on_sale')}, gog_on_sale={gog_data.get('on_sale')}, steam_has_url={'url' in steam_data}, gog_has_url={'url' in gog_data}")
+        log.debug(f"[SaleData] called for '{game_title}', steam_on_sale={steam_data.get('on_sale')}, gog_on_sale={gog_data.get('on_sale')}, steam_has_url={'url' in steam_data}, gog_has_url={'url' in gog_data}")
         region = self._price_region()
         self.master_catalog.set_prices(game_title, steam_data, gog_data, region=region)
         self.events.emit_event(
@@ -1131,7 +1201,7 @@ class GameDetailController:
         )
         current_title = self.current_game_data.get('title')
         if current_title != game_title:
-            print(f"[SaleData] SKIP: current_title='{current_title}' != game_title='{game_title}'")
+            log.debug(f"[SaleData] SKIP: current_title='{current_title}' != game_title='{game_title}'")
             return
 
         platforms = []
@@ -1144,7 +1214,7 @@ class GameDetailController:
             discount = max(discount, gog_data.get("discount_percent", 0))
 
         if not platforms:
-            print(f"[SaleData] platforms empty for '{game_title}' — no sale badge shown")
+            log.debug(f"[SaleData] platforms empty for '{game_title}' — no sale badge shown")
             self._hide_sale_banner()
             if self._is_gold_tier:
                 self._theme.apply_gold()
@@ -1153,7 +1223,7 @@ class GameDetailController:
             return
 
         platform_str = " & ".join(platforms)
-        print(f"[SaleData] platforms={platforms}, discount={discount}")
+        log.debug(f"[SaleData] platforms={platforms}, discount={discount}")
 
         # --- STRUCTURAL THEME (live sale data) ---
         if self._is_gold_tier:
@@ -1163,10 +1233,10 @@ class GameDetailController:
 
         # Per-platform store button glow (on top of base theme)
         if steam_data.get("on_sale"):
-            print(f"[SaleData] Applying STEAM sale glow/style for '{game_title}'")
+            log.debug(f"[SaleData] Applying STEAM sale glow/style for '{game_title}'")
             self._theme.apply_store_sale_glow(self.btn_steam_store)
         if gog_data.get("on_sale"):
-            print(f"[SaleData] Applying GOG sale glow/style for '{game_title}'")
+            log.debug(f"[SaleData] Applying GOG sale glow/style for '{game_title}'")
             self._theme.apply_store_sale_glow(self.btn_gog_store)
 
         banner_text = SaleStyle.sale_cover_banner_text(platform_str, discount)
@@ -1176,7 +1246,7 @@ class GameDetailController:
             self.lbl_game_title.setStyleSheet(SaleStyle.sale_title_style())
 
         sale_badge = SaleStyle.sale_badge_html(platform_str, discount)
-        print(f"[SaleData] setting version label + badge '{sale_badge}'")
+        log.debug(f"[SaleData] setting version label + badge '{sale_badge}'")
         self._set_sale_badge(sale_badge)
 
         desc_html = self.desc_display.toHtml()
@@ -1221,13 +1291,13 @@ class GameDetailController:
                 fallback = fallback.replace(".card-wrapper {", ".card-wrapper { " + shadows, 1)
             return fallback
         except Exception as e:
-            print(f"[Cover] fallback build failed: {e}")
+            log.exception(f"[Cover] fallback build failed: {e}")
             return ""
 
     def _on_cover_page_loaded(self, ok):
         if not ok and not self._cover_fallback_used and self._cover_fallback_html:
             self._cover_fallback_used = True
-            print("[Cover] renderer load failed — retrying without blur glow")
+            log.warning("[Cover] renderer load failed — retrying without blur glow")
             try:
                 page_path = CoverCache.cover_page_url(
                     self._cover_fallback_html,
@@ -1235,7 +1305,7 @@ class GameDetailController:
                 )
                 self.cover_image.setUrl(QUrl.fromLocalFile(page_path))
             except Exception as e:
-                print(f"[Cover] fallback load failed: {e}")
+                log.exception(f"[Cover] fallback load failed: {e}")
             return
         if self._pending_banner:
             self._show_sale_banner(self._pending_banner)
